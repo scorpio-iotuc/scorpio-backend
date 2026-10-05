@@ -2,8 +2,8 @@ import type { SatelliteUpsertJobRepository } from '../repositories/SatelliteUpse
 
 export class GetSatelliteUpsertJob {
   constructor(private readonly jobs: SatelliteUpsertJobRepository) {}
-
   execute() {
+    console.log('[Satellites][UPSERT] Searching the last job executed')
     return this.jobs.findLatest();
   }
 }

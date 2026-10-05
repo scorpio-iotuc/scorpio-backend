@@ -33,6 +33,20 @@ services:
       db:
         condition: service_healthy
 
+  jobs:
+    build:
+      context: .
+      dockerfile: jobs/Dockerfile
+    env_file:
+      - jobs/jobs.env
+    environment:
+      SCORPIO_API_URL: "${SCORPIO_API_URL:-http://api:3000/api}"
+      RUN_ON_START: ${RUN_ON_START:-true}
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   db_data_dev:
 

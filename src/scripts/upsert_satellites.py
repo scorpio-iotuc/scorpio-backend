@@ -38,10 +38,8 @@ def log(message: str) -> None:
 
 def required_env(name: str) -> str:
     value = os.getenv(name)
-
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
-
     return value
 
 
@@ -61,22 +59,72 @@ def main() -> int:
     password = required_env("SCORPIO_AUTOMATION_PASSWORD")
 
     try:
+        # Validate if the API is reachable
+        api_health_response = requests.get(f"{api_url}/health", timeout=(15, 30))
+        api_health_response.raise_for_status()
+        api_status_code = api_health_response.status_code
+        if api_status_code != 200:
+            log(f"API health check failed with status code: {api_status_code}")
+            log(f"Response: {api_health_response.text}")
+            return ERROR
+        else:
+            log("API health check successful")
+
         log("Authenticating automation user")
         login_response = requests.post(
             f"{api_url}/auth/login",
-            json={
-                "email": email,
-                "password": password,
-            },
+            json={"email": email, "password": password},
             timeout=(15, 30),
         )
         login_response.raise_for_status()
+
+        if login_response.status_code != 200:
+            log(f"Login failed with status code: {login_response.status_code}")
+            log(f"Response: {login_response.text}")
+            return ERROR
+        else:
+            log("Login successful")
+
         login_payload = login_response.json()
         token = login_payload.get("token")
-
         if not token:
             raise RuntimeError("Login response does not contain a token")
 
+        # Before triggering, we will check if there was a job alreaddy running or completed
+        # (we will not trigger a new job if there is one running or completed at most 1 hour ago)
+        status_response = requests.get(
+            f"{api_url}/satellites/upsert",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            },
+            timeout=(15, 30),
+        )
+
+        status_payload = status_response.json()
+        finished_at = status_payload.get("finished_at")
+        status = status_payload.get("status", None)
+
+        if not status:
+            log("No previous satellite upsert job found. Trying to trigger a new job.")
+            return OK
+        # Avoid triggering a new job if there is one already running
+        if status == "running":
+            log("A satellite upsert job is already running. Exiting.")
+            return OK
+        # Avoid triggering a new job if the last one was completed or failed less than an hour ago
+        elif (status == "completed" or status == "failed") and finished_at:
+            finished_at_dt = datetime.fromisoformat(finished_at.replace("Z", "+00:00"))
+            time_since_finished = datetime.now().astimezone() - finished_at_dt
+            log(f"Last satellite upsert job completed at {finished_at_dt.isoformat()}")
+            log(f"Time since last completion: {time_since_finished}")
+            if time_since_finished.total_seconds() < 3600:
+                log(
+                    "A satellite upsert job was completed less than an hour ago. Exiting."
+                )
+                return OK
+
+        # Trigger the satellite upsert process
         log("Starting satellite upsert")
         upsert_response = requests.post(
             f"{api_url}/satellites/upsert",
@@ -94,7 +142,7 @@ def main() -> int:
             log("Satellite upsert is still running, waiting for 10 seconds...")
             sleep(10)
             status_response = requests.get(
-                f"{api_url}/satellites/upsert/status",
+                f"{api_url}/satellites/upsert",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/json",
@@ -113,7 +161,6 @@ def main() -> int:
             error_message = status_response.json().get("error_message")
             if error_message:
                 log(f"Error message: {error_message}")
-            log(f"Final status response: {status_response.json()}")
             raise RuntimeError(f"Satellite upsert {status}")
 
     except requests.Timeout:
