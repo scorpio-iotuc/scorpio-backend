@@ -3,5 +3,5 @@
 set -eu
 
 echo "Starting scheduler..."
-exec python /app/scheduler.py
+exec python /app/upsert_satellites_scheduler.py
 echo "Scheduler finished."
