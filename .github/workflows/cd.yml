@@ -2,11 +2,11 @@ name: Scorpio CD
 on:
   # pull_request_target runs this file as it exists on the default branch (main), so a PR
   # cannot alter the deploy steps. Changes to this file only take effect once merged into main.
-  # Never check out the PR head here; only the merge commit already on deploy.
+  # Never check out the PR head here; only the merge commit already on main.
   pull_request_target:
     types: [closed]
     branches:
-      - deploy
+      - main
 
 permissions:
   contents: read
@@ -18,7 +18,7 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to VM
-    # Only PRs merged into deploy; closed-without-merge PRs are skipped.
+    # Only PRs merged into main; closed-without-merge PRs are skipped.
     if: github.event.pull_request.merged == true
     # Self-hosted runner on the SCORPIO VM (user gh-runner, groups docker + scorpio-local).
     runs-on: [self-hosted, scorpio-backend]
@@ -61,8 +61,8 @@ jobs:
           GIT_CONFIG_COUNT=2 \
           GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
-            git fetch --no-tags origin deploy
-          git merge-base --is-ancestor "$DEPLOY_SHA" origin/deploy
+            git fetch --no-tags origin main
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/main
       - name: Check out merged commit
         run: |
           # Keep files group-writable for scorpio-local users.

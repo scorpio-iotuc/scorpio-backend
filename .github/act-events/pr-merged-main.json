@@ -4,7 +4,7 @@
     "merged": true,
     "number": 123,
     "merge_commit_sha": "f7e0c97e668d7d0d3376fda01db0fca4c440e621",
-    "base": { "ref": "deploy" },
+    "base": { "ref": "main" },
     "head": { "ref": "development" }
   }
 }

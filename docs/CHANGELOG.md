@@ -4,7 +4,7 @@
 
 ### Integración continua
 
-- Se incorpora `.github/workflows/ci.yml`, ejecutado solo en pull requests hacia `development`, `deploy` o `main`. Solo valida cambios; no despliega ni requiere secretos de producción.
+- Se incorpora `.github/workflows/ci.yml`, ejecutado solo en pull requests hacia `development` o `main`. Solo valida cambios; no despliega ni requiere secretos de producción.
 - El job **Validate and test** instala dependencias con `npm ci`, ejecuta `prisma validate` y `prisma generate`, compila API y seed, y ejecuta las pruebas unitarias con `npm test`. Su `DATABASE_URL` es ficticia y no se utiliza para conectarse a una base.
 - El job **Docker startup and migrations** depende del anterior: construye el Dockerfile real y levanta PostgreSQL y la API. El entrypoint aplica las migraciones sobre una base vacía; CI espera los healthchecks, consulta `/health` y `/api/health` por el puerto publicado y verifica `prisma migrate status`.
 - Ante fallos se imprimen el estado y los logs de los contenedores. La limpieza se ejecuta independientemente del resultado.
@@ -14,7 +14,7 @@
 - Instrucciones para reproducir los checks, revisar logs, limpiar el entorno y activar los checks requeridos en GitHub: [Test CI workflow](DEVELOPMENT.md#test-ci-workflow).
 
 ### Despliegue continuo
-- Se incorpora `.github/workflows/cd.yml`, ejecutado solo cuando se mergea un PR en `deploy` (`pull_request_target` `closed` con `merged == true`; usa el `cd.yml` de la rama predeterminada `main`, así un PR no puede alterar los pasos de despliegue; el workflow debe estar en `main` para dispararse). Corre en el runner self-hosted `scorpio-backend` de la VM: hace checkout del SHA del merge en `/opt/SCORPIO/scorpio-backend`, ejecuta `docker compose up -d --build --wait` y verifica `/health`, `/api/health` y `prisma migrate status`. Falla sin tocar nada si el directorio tiene cambios sin commitear.
+- Se incorpora `.github/workflows/cd.yml`, ejecutado solo cuando se mergea un PR en `main` (`pull_request_target` `closed` con `merged == true`; usa el `cd.yml` de la rama predeterminada `main`, así un PR no puede alterar los pasos de despliegue; el workflow debe estar en `main` para dispararse). Corre en el runner self-hosted `scorpio-backend` de la VM: hace checkout del SHA del merge en `/opt/SCORPIO/scorpio-backend`, ejecuta `docker compose up -d --build --wait` y verifica `/health`, `/api/health` y `prisma migrate status`. Falla sin tocar nada si el directorio tiene cambios sin commitear.
 
 ### Actualización de satélites en segundo plano
 

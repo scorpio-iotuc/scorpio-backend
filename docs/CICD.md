@@ -1,37 +1,37 @@
 # CI y CD de SCORPIO
 
 * CI: Validacion de esquemas de Prisma, instalacion de dependencias, y despliegue de contenedores Docker para pruebas de arranque y migraciones.
-* CD: Al mergear un PR en `deploy`, despliega ese commit exacto en la VM (`/opt/SCORPIO/scorpio-backend`) con Docker Compose y verifica salud y migraciones.
+* CD: Al mergear un PR en `main`, despliega ese commit exacto en la VM (`/opt/SCORPIO/scorpio-backend`) con Docker Compose y verifica salud y migraciones.
 
 ## Responsabilidades
 
 | Componente | Responsabilidad | Dónde corre |
 | --- | --- | --- |
-| [ci.yml](../.github/workflows/ci.yml) | Validar schema, compilar, probar y verificar el arranque Docker en PRs hacia `development`, `deploy` y `main` | Runners temporales `ubuntu-latest` de GitHub |
-| Ruleset de `deploy` | Impedir merges sin PR y sin los checks requeridos | Configuración del repositorio en GitHub |
-| [cd.yml](../.github/workflows/cd.yml) | Desplegar el commit del merge en la VM y verificar su salud al mergear un PR en `deploy` | Runner self-hosted `scorpio-backend-01` (label `scorpio-backend`) en la VM |
+| [ci.yml](../.github/workflows/ci.yml) | Validar schema, compilar, probar y verificar el arranque Docker en PRs hacia `development` y `main` | Runners temporales `ubuntu-latest` de GitHub |
+| Ruleset de `main` | Impedir merges sin PR y sin los checks requeridos | Configuración del repositorio en GitHub |
+| [cd.yml](../.github/workflows/cd.yml) | Desplegar el commit del merge en la VM y verificar su salud al mergear un PR en `main` | Runner self-hosted `scorpio-backend-01` (label `scorpio-backend`) en la VM |
 
-## Flujo hacia deploy
+## Flujo hacia main
 
 ```mermaid
 flowchart TD
-    PR["Abrir o actualizar un PR hacia deploy"] --> CI["CI: Validate and test"]
+    PR["Abrir o actualizar un PR hacia main"] --> CI["CI: Validate and test"]
     CI -->|"Aprobado"| Docker["CI: Docker startup and migrations"]
     CI -->|"Falla"| Block["Merge bloqueado si el ruleset está activo"]
     Docker -->|"Falla"| Block
     Docker -->|"Aprobado"| Rules["GitHub verifica checks y revisiones requeridas"]
-    Rules --> Merge["Merge del PR a deploy"]
+    Rules --> Merge["Merge del PR a main"]
     Merge --> Closed["Evento pull_request_target closed con merged = true"]
     Closed --> CD["CD en runner self-hosted: checkout del SHA del merge en /opt/SCORPIO/scorpio-backend"]
     CD --> Up["docker compose up -d --build --wait (el entrypoint aplica migraciones)"]
     Up --> Health["Verifica /health, /api/health y prisma migrate status"]
 ```
 
-El flujo protegido depende de configurar el ruleset. Los YAML no crean esa regla. CD no consulta automáticamente el resultado de CI: lo dispara el merge del PR. Un push directo a `deploy` **no** dispara CD, pero sí cambia la rama; por eso el ruleset debe bloquear pushes directos para que la rama y lo desplegado no diverjan.
+El flujo protegido depende de configurar el ruleset. Los YAML no crean esa regla. CD no consulta automáticamente el resultado de CI: lo dispara el merge del PR. Un push directo a `main` **no** dispara CD, pero sí cambia la rama; por eso el ruleset debe bloquear pushes directos para que la rama y lo desplegado no diverjan.
 
 ## CI: cuándo se ejecuta
 
-- Solo en `pull_request` cuyo destino es `development`, `deploy` o `main`, en sus eventos predeterminados: apertura, actualización de commits y reapertura.
+- Solo en `pull_request` cuyo destino es `development` o `main`, en sus eventos predeterminados: apertura, actualización de commits y reapertura.
 - No corre en pushes (tampoco tras el merge) ni de forma manual.
 
 La validación ocurre en el PR antes del merge. No se ha configurado `merge_group`: si se adopta una merge queue, hay que agregar ese evento.
@@ -76,7 +76,7 @@ Para reproducir los checks localmente, consultar [Test CI workflow](DEVELOPMENT.
 
 ## Reglas de merge en GitHub
 
-En Settings, crear o actualizar el ruleset dirigido a `deploy`:
+En Settings, crear o actualizar el ruleset dirigido a `main`:
 
 - **Enforcement status: Active**.
 - **Require a pull request before merging**.
@@ -93,8 +93,9 @@ La activación real del ruleset se comprueba en GitHub; su existencia no se pued
 
 ### Cuándo se ejecuta
 
-- Con `pull_request_target` de tipo `closed` hacia `deploy` (ver [Seguridad](#seguridad-repos-públicos)). El job solo corre si `github.event.pull_request.merged == true`; un PR cerrado sin merge se omite.
-- No se dispara con pushes directos a `deploy` ni permite ejecución manual.
+- Con `pull_request_target` de tipo `closed` hacia `main` (ver [Seguridad](#seguridad-repos-públicos)). El job solo corre si `github.event.pull_request.merged == true`; un PR cerrado sin merge se omite.
+- No se dispara con pushes directos a `main` ni permite ejecución manual.
+- La rama `deploy` dejó de usarse para desplegar y se eliminará.
 
 ### Dónde corre
 
@@ -111,7 +112,7 @@ El despliegue opera directamente sobre `/opt/SCORPIO/scorpio-backend`, el mismo 
 | Paso | Qué hace |
 | --- | --- |
 | Check deploy directory is clean | Falla si hay cambios sin commitear en archivos versionados |
-| Fetch merged commit | `git fetch origin deploy` autenticado con el `GITHUB_TOKEN` del job (`contents: read`) y comprueba que `merge_commit_sha` pertenezca a `origin/deploy` |
+| Fetch merged commit | `git fetch origin main` autenticado con el `GITHUB_TOKEN` del job (`contents: read`) y comprueba que `merge_commit_sha` pertenezca a `origin/main` |
 | Check out merged commit | `git checkout --detach <merge_commit_sha>`: se despliega exactamente el commit del merge, no la punta de la rama |
 | Build and start containers | `docker compose up -d --build --remove-orphans --wait --wait-timeout 300`. El entrypoint aplica `prisma migrate deploy`; `--wait` exige que `db` y `api` queden healthy |
 | Verify health and migrations | Desde dentro del contenedor: `/health` y `/api/health` con `status: "ok"`, y `prisma migrate status` |
@@ -126,8 +127,8 @@ El grupo de concurrencia `scorpio-cd-deploy` con `cancel-in-progress: false` imp
 
 Los repos son públicos y el runner self-hosted corre como `gh-runner`, que pertenece al grupo `docker` (en la práctica, root en la VM) y tiene acceso a `/opt/SCORPIO` y a los `.env` productivos.
 
-- **`pull_request_target` en vez de `pull_request`.** Con `pull_request`, GitHub ejecuta el `cd.yml` del PR: un fork podría modificarlo (quitar el `if: merged`, cambiar los pasos) y su código correría en la VM al cerrarse el PR. Con `pull_request_target`, GitHub usa el `cd.yml` de la **rama predeterminada (`main`)**, no el del PR ni el de `deploy`. El job nunca hace checkout del head del PR, solo de `merge_commit_sha`, que ya está en `deploy`.
-- **Consecuencia: `cd.yml` debe estar en `main`.** Si `main` no tiene el workflow, mergear en `deploy` no dispara nada (ni siquiera aparece un run omitido). Un cambio a `cd.yml` solo tiene efecto cuando llega a `main`, normalmente con un PR `deploy` → `main` después de mergear en `deploy`.
+- **`pull_request_target` en vez de `pull_request`.** Con `pull_request`, GitHub ejecuta el `cd.yml` del PR: un fork podría modificarlo (quitar el `if: merged`, cambiar los pasos) y su código correría en la VM al cerrarse el PR. Con `pull_request_target`, GitHub usa el `cd.yml` de la rama predeterminada, `main`, nunca el del PR. El job nunca hace checkout del head del PR, solo de `merge_commit_sha`, que ya está en `main`.
+- **Consecuencia:** un cambio a `cd.yml` solo tiene efecto una vez mergeado en `main`. Si `main` no tiene el workflow, un merge no dispara nada (ni siquiera aparece un run omitido).
 - **Límite:** esto no impide que un fork agregue un workflow **nuevo** con `runs-on: [self-hosted, scorpio-backend]` y `on: pull_request`. La protección contra eso es una configuración de GitHub, no del YAML.
 - **CI sigue en `ubuntu-latest`** por la misma razón: ejecuta código de PRs sin mergear.
 
@@ -146,13 +147,13 @@ Configuración requerida en **Settings → Actions → General**:
 
 - Si falla antes de `docker compose up`, la VM sigue con la versión anterior.
 - Si falla durante o después de `docker compose up`, los contenedores pueden quedar con la versión nueva a medio levantar. Revisar el resumen y los logs del job.
-- Para volver a una versión anterior: mergear en `deploy` un PR que revierta el cambio. Como alternativa manual en la VM: `git checkout --detach <sha-anterior> && docker compose up -d --build --wait`.
+- Para volver a una versión anterior: mergear en `main` un PR que revierta el cambio. Como alternativa manual en la VM: `git checkout --detach <sha-anterior> && docker compose up -d --build --wait`.
 - **Volver a una imagen anterior no revierte migraciones de la base.** Una migración incompatible requiere una migración correctiva.
 
 ### Pendiente
 
 - Si se requiere aprobación adicional antes de modificar producción, configurar un environment `production` con revisores y asociarlo al job.
-- CD no consulta el resultado de CI; depende del ruleset de `deploy` para no mergear con CI fallido.
+- CD no consulta el resultado de CI; depende del ruleset de `main` para no mergear con CI fallido.
 
 ## Probar los workflows con act
 
@@ -168,8 +169,8 @@ Los eventos simulados están en [.github/act-events](../.github/act-events):
 
 | Archivo | Simula |
 | --- | --- |
-| `pr-merged-deploy.json` | PR #123 mergeado a `deploy` (`merge_commit_sha: deadbeef`) |
-| `pr-closed-deploy.json` | PR hacia `deploy` cerrado sin merge |
+| `pr-merged-main.json` | PR #123 mergeado a `main` (con un `merge_commit_sha` de ejemplo) |
+| `pr-closed-main.json` | PR hacia `main` cerrado sin merge |
 | `pr-opened-development.json` | PR abierto hacia `development` |
 
 Ejecutar desde la raíz del repositorio.
@@ -180,15 +181,15 @@ Ejecutar desde la raíz del repositorio.
 
 ```bash
 # PR mergeado: lista los pasos de "Deploy to VM" (Check deploy directory is clean ... Record deployment)
-act pull_request_target -n -W .github/workflows/cd.yml -e .github/act-events/pr-merged-deploy.json \
+act pull_request_target -n -W .github/workflows/cd.yml -e .github/act-events/pr-merged-main.json \
   -P self-hosted=catthehacker/ubuntu:act-latest
 
 # PR cerrado sin merge: no planifica ningún paso
-act pull_request_target -n -W .github/workflows/cd.yml -e .github/act-events/pr-closed-deploy.json \
+act pull_request_target -n -W .github/workflows/cd.yml -e .github/act-events/pr-closed-main.json \
   -P self-hosted=catthehacker/ubuntu:act-latest
 ```
 
-Para probar el despliegue real, mergear un PR en `deploy` y revisar el run en Actions.
+Para probar el despliegue real, mergear un PR en `main` y revisar el run en Actions.
 
 ### CI
 

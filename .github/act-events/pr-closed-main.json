@@ -4,7 +4,7 @@
     "merged": false,
     "number": 123,
     "merge_commit_sha": "deadbeef",
-    "base": { "ref": "deploy" },
+    "base": { "ref": "main" },
     "head": { "ref": "development" }
   }
 }
