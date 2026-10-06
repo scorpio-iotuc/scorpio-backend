@@ -1,4 +1,4 @@
-import { AuthenticatedUser } from '../modules/auth/dto/AuthenticatedUser';
+import { AuthenticatedUser } from '../modules/auth/entities/AuthenticateUser';
 
 declare global {
   namespace Express {

@@ -4,24 +4,34 @@ import { SatelliteRepository } from '../repositories/SatelliteRepository';
 import { CelesTrakClient } from '../services/CelesTrakClient';
 import { ListSatellites } from '../use-cases/ListSatellites';
 import { UpsertSatellites } from '../use-cases/UpsertSatellites';
-import { UserType } from '../../users/entities/User';
+import { SatelliteUpsertJobRepository } from '../repositories/SatelliteUpsertJobRepository';
+import { GetSatelliteUpsertJob } from '../use-cases/GetSatelliteUpsertJob';
+import { RunJobSatelliteUpsert } from '../use-cases/RunJobSatelliteUpsert';
+
+
 export class SatelliteController {
   private readonly listSatellites: ListSatellites;
-  private readonly upsertSatellites: UpsertSatellites;
+  private readonly runJobSatelliteUpsert: RunJobSatelliteUpsert;
+  private readonly getSatelliteUpsertJob: GetSatelliteUpsertJob;
 
   constructor(
     satelliteRepository: SatelliteRepository,
     celestrakClient: CelesTrakClient,
+    jobRepository: SatelliteUpsertJobRepository,
   ) {
     this.listSatellites = new ListSatellites(satelliteRepository);
-    this.upsertSatellites = new UpsertSatellites(satelliteRepository, celestrakClient);
+    this.runJobSatelliteUpsert = new RunJobSatelliteUpsert(
+      jobRepository, new UpsertSatellites(satelliteRepository, celestrakClient),
+    );
+    this.getSatelliteUpsertJob = new GetSatelliteUpsertJob(jobRepository);
   }
 
   public static build(
     satelliteRepository: SatelliteRepository,
     celestrakClient: CelesTrakClient,
+    jobRepository: SatelliteUpsertJobRepository,
   ): SatelliteController {
-    return new SatelliteController(satelliteRepository, celestrakClient);
+    return new SatelliteController(satelliteRepository, celestrakClient, jobRepository);
   }
 
   list = async (req: Request, res: Response): Promise<Response> => {
@@ -61,25 +71,18 @@ export class SatelliteController {
     return res.status(200).json(satellites);
   };
 
-  upsert = async (req: Request, res: Response): Promise<Response> => {
-    try {
-      const user = req.user
-      if (!user) {
-        return res.status(404).json({ message: 'Forbidden credentials' });
-      }
-      if (user.type != UserType.ADMIN) {
-        return res.status(400).json({ message: 'User is not admin.' });
-      }
-      const result = await this.upsertSatellites.upsertSatellites();
-
-      return res.status(200).json(result);
-    } catch (error) {
-      console.error('[Satellites][UPSERT] Failed to synchronize satellites', error);
-
-      const message = error instanceof Error ? error.message : 'Unexpected error. check the logs for more details';
-      const statusCode = message.includes('CelesTrak') || message.includes('download') ? 502 : 400;
-
-      return res.status(statusCode).json({ message });
+  upsert = async (_req: Request, res: Response): Promise<Response> => {
+    const job = await this.runJobSatelliteUpsert.execute();
+    if (!job) {
+      return res.status(409).json({ message: 'A satellite update is already running.' });
     }
+    return res.status(202).json(job);
+  };
+
+  getUpsert = async (_req: Request, res: Response): Promise<Response> => {
+    const job = await this.getSatelliteUpsertJob.execute();
+    res.setHeader('Cache-Control', 'no-store');
+    if (!job) return res.status(404).json({ message: 'No satellite update has been started.' });
+    return res.status(200).json(job);
   };
 }

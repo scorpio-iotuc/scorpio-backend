@@ -7,6 +7,8 @@ import { UserRepository } from './UserRepository';
 import { prisma } from '../../../lib/prisma';
 import bcrypt from "bcrypt";
 
+const SALT_ROUNDS = 12;
+
 
 const toDomainUserType = (type: PrismaUserType): UserType =>
   type === PrismaUserType.ADMIN ? UserType.ADMIN : UserType.NORMAL;
@@ -33,8 +35,7 @@ const toPublicUser = (user: PrismaUser): User => ({
 
 export class PrismaUserRepository implements UserRepository {
   async create(data: CreateUserDTO): Promise<User> {
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(data.password, saltRounds);
+    const hashedPassword = await bcrypt.hash(data.password, SALT_ROUNDS);
 
     const user = await prisma.user.create({
       data: {
@@ -45,7 +46,7 @@ export class PrismaUserRepository implements UserRepository {
       },
     });
 
-    return toDomainUser(user);
+    return toPublicUser(user);
   }
 
   async findById(id: number): Promise<User | null> {
@@ -86,11 +87,14 @@ export class PrismaUserRepository implements UserRepository {
       data: {
         name: data.name ?? existingUser.name,
         email: data.email ?? existingUser.email,
-        pwd_encrypted: data.password ?? existingUser.pwd_encrypted,
+        pwd_encrypted: data.password
+          ? await bcrypt.hash(data.password, SALT_ROUNDS)
+          : existingUser.pwd_encrypted,
+        type: data.type !== undefined ? toPrismaUserType(data.type) : existingUser.type,
       },
     });
 
-    return toDomainUser(updatedUser);
+    return toPublicUser(updatedUser);
   }
 
   async delete(id: number): Promise<boolean> {

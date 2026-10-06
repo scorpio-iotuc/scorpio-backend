@@ -20,6 +20,7 @@ export const initializeSocket = (app: Express): { server: ReturnType<typeof crea
   const server = createServer(app);
 
   io = new SocketIOServer(server, {
+    path: process.env.SOCKET_PATH ?? '/api/socket.io',
     cors: {
       origin: frontendUrl,
       credentials: true,

@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-seed
+db_data
+.env
+.env.*
+**/*.env
+**/*.env.*
+**/.env
+**/.env.*
+!.env.example
+.venv
+**/__pycache__
+.git
+*.log

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { UserRepository } from '../../users/repositories/UserRepository';
 import { SignUp } from '../use-cases/SignUp';
 import { Login } from '../use-cases/LogIn';
+import { getSignupMode, isPublicSignupEnabled } from '../../../lib/config';
 
 export class AuthController {
   private readonly signUp: SignUp;
@@ -15,9 +16,16 @@ export class AuthController {
     return new AuthController(userRepository);
   };
 
+  config = async (_req: Request, res: Response): Promise<Response> => {
+    return res.status(200).json({ signupMode: getSignupMode() });
+  };
+
   signup = async (req: Request, res: Response): Promise<Response> => {
     try {
       console.log('[Users][SIGNUP] Request received');
+      if (!isPublicSignupEnabled()) {
+        return res.status(403).json({ message: 'Public signup is disabled' });
+      }
       const body = req.body;
       if (
         typeof body?.name !== 'string' ||
@@ -41,11 +49,7 @@ export class AuthController {
       return res.status(200).json(result)
     } catch (error) {
       console.error('[Users][SIGNUP] Failed to create user', error);
-      const message =
-        error instanceof Error
-          ? `Unexpected error: ${error.message}`
-          : 'Unexpected error. check the logs for more details';
-      return res.status(400).json({ message });
+      return res.status(500).json({ message: 'Unexpected error. check the logs for more details' });
     }
   };
 
@@ -71,9 +75,8 @@ export class AuthController {
       console.info('[Users][LOGIN] Login successful');
       return res.status(200).json(result);
     } catch (error) {
-      console.error('[Users][LOGIN] Failed to update user', error);
-      const message = error instanceof Error ? error.message : 'Unexpected error';
-      return res.status(500).json({ message });
+      console.error('[Users][LOGIN] Failed to log in', error);
+      return res.status(500).json({ message: 'Unexpected error' });
     }
   }
 }

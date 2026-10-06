@@ -7,6 +7,7 @@ export const buildAuthRoutes = (): Router => {
     const router = Router();
     const authController = AuthController.build(userRepository);
 
+    router.get('/config', authController.config)
     router.post('/signup', authController.signup)
     router.post('/login', authController.login)
 

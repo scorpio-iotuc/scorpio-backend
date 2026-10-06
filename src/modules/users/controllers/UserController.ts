@@ -9,6 +9,14 @@ import { ListUsers } from '../use-cases/ListUsers';
 import { UpdateUser } from '../use-cases/UpdateUser';
 import { UserType } from '../entities/User';
 
+// Domain errors that are safe to show to the client; anything else gets a generic message
+const CLIENT_ERRORS = new Set(['User already exists', 'Email already in use', 'User type cannot be updated']);
+
+const toClientMessage = (error: unknown): string =>
+  error instanceof Error && CLIENT_ERRORS.has(error.message)
+    ? error.message
+    : 'Unexpected error. check the logs for more details';
+
 export class UserController {
   private readonly createUser: CreateUser;
   private readonly getUser: GetUser;
@@ -37,6 +45,14 @@ export class UserController {
         });
       }
       const payload = req.body as CreateUserDTO;
+      if (
+        typeof payload.name !== 'string' ||
+        typeof payload.email !== 'string' ||
+        typeof payload.password !== 'string' ||
+        (payload.type !== undefined && !Object.values(UserType).includes(payload.type))
+      ) {
+        return res.status(400).json({ message: 'Invalid request body.' });
+      }
       const createdUser = await this.createUser.execute(payload);
 
       console.log('[Users][CREATE] User created successfully', { id: createdUser.id });
@@ -44,11 +60,7 @@ export class UserController {
       return res.status(201).json(createdUser);
     } catch (error) {
       console.error('[Users][CREATE] Failed to create user', error);
-      const message =
-        error instanceof Error
-          ? `Unexpected error: ${error.message}`
-          : 'Unexpected error. check the logs for more details';
-      return res.status(400).json({ message });
+      return res.status(400).json({ message: toClientMessage(error) });
     }
   };
 
@@ -59,6 +71,10 @@ export class UserController {
 
     if (Number.isNaN(id)) {
       return res.status(400).json({ message: 'Invalid user id' });
+    }
+
+    if (req.user?.id !== id && req.user?.type !== UserType.ADMIN) {
+      return res.status(403).json({ message: 'You are not allowed to view this user.' });
     }
 
     const user = await this.getUser.execute(id);
@@ -99,8 +115,27 @@ export class UserController {
     try {
       const payload = req.body as UpdateUserDTO;
 
-      if (payload.type) {
-        return res.status(400).json({ message: 'User type cannot be updated' });
+      if (!payload || typeof payload !== 'object') {
+        return res.status(400).json({ message: 'Invalid request body.' });
+      }
+
+      if (
+        (payload.name !== undefined && typeof payload.name !== 'string') ||
+        (payload.email !== undefined && typeof payload.email !== 'string') ||
+        (payload.password !== undefined && typeof payload.password !== 'string')
+      ) {
+        return res.status(400).json({ message: 'Invalid request body.' });
+      }
+
+      if (payload.type !== undefined) {
+        if (!Object.values(UserType).includes(payload.type)) {
+          return res.status(400).json({ message: 'Invalid request body.' });
+        }
+
+        // Only an admin may change the role, and never their own (avoids self-escalation and self-lockout)
+        if (user.type !== UserType.ADMIN || user.id == id) {
+          return res.status(400).json({ message: 'User type cannot be updated' });
+        }
       }
 
       const updatedUser = await this.updateUser.execute(id, payload);
@@ -115,11 +150,7 @@ export class UserController {
       return res.status(200).json(updatedUser);
     } catch (error) {
       console.error('[Users][UPDATE] Failed to update user', error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'Unexpected error. Provide the user attributes to update';
-      return res.status(400).json({ message });
+      return res.status(400).json({ message: toClientMessage(error) });
     }
   };
 

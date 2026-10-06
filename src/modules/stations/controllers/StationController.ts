@@ -10,6 +10,14 @@ import { RegenerateStationKey } from '../use-cases/RegenerateStationKey';
 import { UpdateStation } from '../use-cases/UpdateStation';
 import { PacketRepository } from '../../packets/repositories/PacketRepository';
 
+const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+
+const isOptional = (value: unknown, check: (v: unknown) => boolean): boolean => value === undefined || check(value);
+
+const isValidDecoderConfig = (value: unknown): boolean =>
+  value === null ||
+  (Array.isArray(value) && value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255));
+
 export class StationController {
   private readonly createStation: CreateStation;
   private readonly listStations: ListStations;
@@ -44,8 +52,22 @@ export class StationController {
           message: 'Invalid request body.',
         });
       }
-      const payload = req.body as CreateStationDTO;
-      payload.ownerId = userId;
+      const body = req.body as Record<string, unknown>;
+      if (
+        typeof body.name !== 'string' ||
+        !isFiniteNumber(body.latitude) ||
+        !isFiniteNumber(body.longitude) ||
+        !isFiniteNumber(body.altitude)
+      ) {
+        return res.status(400).json({ message: 'Invalid request body.' });
+      }
+      const payload: CreateStationDTO = {
+        name: body.name,
+        latitude: body.latitude,
+        longitude: body.longitude,
+        altitude: body.altitude,
+        ownerId: userId,
+      };
       const stationCredentials = await this.createStation.execute(payload);
       if (!stationCredentials) {
         return res.status(404).json({ message: 'Owner user not found' });
@@ -53,11 +75,7 @@ export class StationController {
       return res.status(201).json(stationCredentials);
     } catch (error) {
       console.error('[Stations][CREATE] Failed to create station', error);
-      const message =
-        error instanceof Error
-          ? `Unexpected error: ${error.message}`
-          : 'Unexpected error. check the logs for more details';
-      return res.status(400).json({ message });
+      return res.status(500).json({ message: 'Unexpected error. check the logs for more details' });
     }
   };
 
@@ -117,7 +135,23 @@ export class StationController {
       return res.status(400).json({ message: 'Invalid request body.' });
     }
 
-    const payload = req.body as UpdateStationDTO;
+    const body = req.body as Record<string, unknown>;
+    if (
+      !isOptional(body.name, (v) => typeof v === 'string') ||
+      !isOptional(body.latitude, isFiniteNumber) ||
+      !isOptional(body.longitude, isFiniteNumber) ||
+      !isOptional(body.altitude, isFiniteNumber) ||
+      !isOptional(body.decoderConfig, isValidDecoderConfig)
+    ) {
+      return res.status(400).json({ message: 'Invalid request body.' });
+    }
+    const payload: UpdateStationDTO = {
+      name: body.name as string | undefined,
+      latitude: body.latitude as number | undefined,
+      longitude: body.longitude as number | undefined,
+      altitude: body.altitude as number | undefined,
+      decoderConfig: body.decoderConfig as number[] | null | undefined,
+    };
 
     const updatedStation = await this.updateStation.execute(uuid, payload, user);
 

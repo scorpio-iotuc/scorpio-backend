@@ -30,7 +30,13 @@ const parseAuthorization = (
   };
 };
 
-const hashKey = (key: string): string => crypto.createHash('sha256').update(key).digest('hex');
+const hashKey = (key: string): Buffer => crypto.createHash('sha256').update(key).digest();
+
+const isValidKey = (key: string, expectedHashHex: string): boolean => {
+  const expected = Buffer.from(expectedHashHex, 'hex');
+  const actual = hashKey(key);
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+};
 
 export class CreatePacket {
   constructor(
@@ -55,7 +61,7 @@ export class CreatePacket {
       return null;
     }
 
-    if (station.ownerKeyHash !== hashKey(credentials.key)) {
+    if (!isValidKey(credentials.key, station.ownerKeyHash)) {
       return null;
     }
 

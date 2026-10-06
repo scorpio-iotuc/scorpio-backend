@@ -1,6 +1,7 @@
 import { UserRepository } from "../../users/repositories/UserRepository";
 import { SignUpDTO } from "../dto/SignUpDTO";
 import { SignUpResponseDTO } from "../dto/SignUpResponseDTO";
+import { UserType } from "../../users/entities/User";
 
 
 export class SignUp {
@@ -15,6 +16,7 @@ export class SignUp {
             name: data.name,
             email: data.email,
             password: data.password,
+            type: UserType.NORMAL,
         })
         return {
             id: user.id,

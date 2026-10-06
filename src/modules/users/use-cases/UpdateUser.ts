@@ -6,10 +6,6 @@ export class UpdateUser {
   constructor(private readonly userRepository: UserRepository) {}
 
   async execute(id: number, data: UpdateUserDTO): Promise<User | null> {
-    if (data.type) {
-      throw new Error('User type cannot be updated');
-    }
-
     const existingUser = await this.userRepository.findById(id);
 
     if (!existingUser) {

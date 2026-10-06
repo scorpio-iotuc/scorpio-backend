@@ -14,20 +14,12 @@ export class DeleteStation {
     if (!existingStation) {
       return false;
     }
-    const stationId = existingStation.id;
-    const stationPackets = await this.packetRepository.findAll({
-      stationUuid: uuid
-    })
-
-    if (stationPackets.data.length > 0) {
-      // Remove all packets related to the current station
-      await this.packetRepository.deleteAll({ stationId: stationId });
-
-    }
-    const owner = await this.stationRepository.findByOwnerId(uuid, user.id);
-    if (!owner && user.type !== UserType.ADMIN) {
+    // Check ownership before touching any data
+    if (existingStation.ownerId !== user.id && user.type !== UserType.ADMIN) {
       return false;
     }
+    // Remove all packets related to the current station
+    await this.packetRepository.deleteAll({ stationId: existingStation.id });
 
     return this.stationRepository.delete(uuid);
   }

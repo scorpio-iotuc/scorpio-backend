@@ -9,7 +9,7 @@ const adapter = new PrismaPg({
 const prisma = new PrismaClient({ adapter });
 
 async function main(): Promise<void> {
-  const saltRounds = 10;
+  const saltRounds = 12;
   const adminPwd = process.env.ADMIN_PWD;
   if (!adminPwd) {
     throw new Error('ADMIN_PWD is not defined');
@@ -21,11 +21,10 @@ async function main(): Promise<void> {
     pwd_encrypted: hashedPassword,
     type: UserType.ADMIN,
   };
+  // Only create the admin if missing; never reset an existing admin's password on restart
   await prisma.user.upsert({
     where: { email: admin.email },
     update: {
-      name: admin.name,
-      pwd_encrypted: admin.pwd_encrypted,
       type: admin.type,
     },
     create: {
