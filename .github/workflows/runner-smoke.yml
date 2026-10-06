@@ -1,0 +1,73 @@
+# Temporary: validates the CD runner environment without deploying. Delete once CD has run.
+name: Scorpio CD runner smoke test
+on:
+  push:
+    branches:
+      - runner-smoke-test
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scorpio-cd-deploy
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Runner smoke test (no deploy)
+    runs-on: [self-hosted, scorpio-backend]
+    timeout-minutes: 10
+    env:
+      DEPLOY_DIR: /opt/SCORPIO/scorpio-backend
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /opt/SCORPIO/scorpio-backend
+    defaults:
+      run:
+        shell: bash
+        working-directory: /opt/SCORPIO/scorpio-backend
+    steps:
+      - name: Runner identity
+        run: |
+          id
+          pwd
+          docker version --format 'docker {{.Server.Version}}'
+      - name: Write permissions
+        run: |
+          for path in . .git .git/objects .git/refs/remotes; do
+            test -w "$path" && echo "writable: $path"
+          done
+      # Reported, not enforced: CD fails at this point if the list is not empty.
+      - name: Deploy directory status
+        run: |
+          git rev-parse --abbrev-ref HEAD
+          changes=$(git status --porcelain --untracked-files=no)
+          if [ -n "$changes" ]; then
+            echo "::warning::CD would refuse to deploy: uncommitted changes in $DEPLOY_DIR"
+            echo "$changes"
+          else
+            echo "clean"
+          fi
+      # Same authenticated fetch as CD; only updates origin/deploy, the working tree is untouched.
+      - name: Fetch deploy
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          GIT_CONFIG_COUNT=2 \
+          GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
+            git fetch --no-tags origin deploy
+          git log -1 --oneline origin/deploy
+      - name: Compose and running stack
+        run: |
+          docker compose config -q && echo "compose config ok"
+          docker compose ps
+      - name: Health checks used by CD
+        run: |
+          for path in /health /api/health; do
+            docker compose exec -T api wget -qO- "http://127.0.0.1:3000${path}" | grep -q '"status":"ok"'
+            echo "ok: $path"
+          done
+          docker compose exec -T api npx prisma migrate status
