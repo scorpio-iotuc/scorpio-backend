@@ -137,13 +137,14 @@ export class UpsertSatellites {
     private readonly celestrakClient: CelesTrakClient,
   ) {}
 
-  async upsertSatellites(): Promise<UpsertSatellitesResultDTO> {
+  async upsertSatellites(onDownloaded?: () => Promise<void>): Promise<UpsertSatellitesResultDTO> {
     const startedAt = Date.now();
 
     console.log('[Satellites][UPSERT] Downloading active satellites from CelesTrak');
 
     try {
       const responseBody = await this.celestrakClient.downloadActiveSatellites();
+      await onDownloaded?.();
       const parsedSatellites = parseCelesTrakJsonResponse(responseBody);
       const result = await this.satelliteRepository.upsertMany(parsedSatellites.map(toUpsertSatelliteDTO));
 
@@ -165,7 +166,7 @@ export class UpsertSatellites {
     }
   }
 
-  async execute(): Promise<UpsertSatellitesResultDTO> {
-    return this.upsertSatellites();
+  async execute(onDownloaded?: () => Promise<void>): Promise<UpsertSatellitesResultDTO> {
+    return this.upsertSatellites(onDownloaded);
   }
 }

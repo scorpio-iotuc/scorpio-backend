@@ -17,6 +17,25 @@ enum UserType {
   ADMIN  @map("admin")
 }
 
+enum SatelliteUpsertJobStatus {
+  running
+  completed
+  failed
+}
+
+model SatelliteUpsertJob {
+  id            String                  @id @default(uuid())
+  status        SatelliteUpsertJobStatus @default(running)
+  started_at    DateTime                 @default(now())
+  finished_at   DateTime?
+  downloaded    Boolean                 @default(false)
+  created       DateTime                 @default(now())
+  updated       DateTime                 @updatedAt
+  error_message String?
+
+  @@index([created])
+}
+
 model User {
   id            Int      @id @default(autoincrement())
   name          String

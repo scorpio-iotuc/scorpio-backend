@@ -1,0 +1,8 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": 124,
+    "base": { "ref": "development" },
+    "head": { "ref": "feat/example" }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "action": "closed",
+  "pull_request": {
+    "merged": false,
+    "number": 123,
+    "merge_commit_sha": "deadbeef",
+    "base": { "ref": "deploy" },
+    "head": { "ref": "development" }
+  }
+}

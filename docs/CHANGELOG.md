@@ -1,5 +1,45 @@
 # Changelog
 
+## [Unreleased] Release: CI y jobs de satélites (2026-10-02)
+
+### Integración continua
+
+- Se incorpora `.github/workflows/ci.yml`, ejecutado solo en pull requests hacia `development`, `deploy` o `main`. Solo valida cambios; no despliega ni requiere secretos de producción.
+- El job **Validate and test** instala dependencias con `npm ci`, ejecuta `prisma validate` y `prisma generate`, compila API y seed, y ejecuta las pruebas unitarias con `npm test`. Su `DATABASE_URL` es ficticia y no se utiliza para conectarse a una base.
+- El job **Docker startup and migrations** depende del anterior: construye el Dockerfile real y levanta PostgreSQL y la API. El entrypoint aplica las migraciones sobre una base vacía; CI espera los healthchecks, consulta `/health` y `/api/health` por el puerto publicado y verifica `prisma migrate status`.
+- Ante fallos se imprimen el estado y los logs de los contenedores. La limpieza se ejecuta independientemente del resultado.
+- `docker-compose.ci.yml` es independiente: usa almacenamiento temporal, credenciales de prueba y un puerto dinámico, sin archivos de entorno locales, volúmenes productivos ni redes externas. El seed se compila pero no se ejecuta; no se llama a CelesTrak.
+- Se mantienen alineadas las versiones de Node.js del workflow y Dockerfile. Se excluyen archivos de entorno y `.venv` del contexto Docker.
+- Las comprobaciones no reemplazan pruebas de integración de endpoints ni pruebas de migración sobre datos existentes.
+- Instrucciones para reproducir los checks, revisar logs, limpiar el entorno y activar los checks requeridos en GitHub: [Test CI workflow](DEVELOPMENT.md#test-ci-workflow).
+
+### Despliegue continuo
+- Se incorpora `.github/workflows/cd.yml`, ejecutado solo cuando se mergea un PR en `deploy` (`pull_request_target` `closed` con `merged == true`; usa el `cd.yml` de `deploy`, así un PR no puede alterar los pasos de despliegue). Corre en el runner self-hosted `scorpio-backend` de la VM: hace checkout del SHA del merge en `/opt/SCORPIO/scorpio-backend`, ejecuta `docker compose up -d --build --wait` y verifica `/health`, `/api/health` y `prisma migrate status`. Falla sin tocar nada si el directorio tiene cambios sin commitear.
+
+### Actualización de satélites en segundo plano
+
+- Ambos endpoints requieren un Bearer token de administrador.
+- `POST /api/satellites/upsert` registra un job `running` y responde **202 Accepted** con su registro. La descarga y actualización continúan en el mismo proceso Node.js. Responde **409 Conflict** si ya existe una ejecución activa.
+- `GET /api/satellites/upsert` devuelve la última ejecución, incluso si falló, o **404** si no existe ninguna. Consultar el estado no inicia una descarga y no equivale a consultar la última ejecución exitosa.
+- El modelo `SatelliteUpsertJob` persiste los estados enum `running`, `completed` y `failed`. `downloaded` pasa a `true` al finalizar la descarga HTTP; no garantiza datos válidos ni una actualización exitosa de la base.
+- `created` y `updated` son fechas del job, no cantidades de satélites. `finished_at` y `error_message` admiten `null`.
+- La migración `20261002180000_satellite_upsert_jobs` incluye un índice único parcial para permitir un solo job activo, incluso entre varias instancias de la API.
+
+### Jobs actualizacion de satelites (upsert)
+
+- Se agrega el script
+
+
+### Migración y operación
+
+- Generar el cliente con `npx prisma generate` y aplicar `npx prisma migrate deploy` antes de ejecutar la nueva API. El segundo comando requiere una `DATABASE_URL` válida; el entrypoint Docker ya ejecuta las migraciones con la conexión configurada en Compose.
+- Los consumidores del POST deben tratar **202** como aceptación, no como actualización terminada. Las automatizaciones deben consultar GET hasta un estado terminal y comprobar que el ID corresponda al devuelto por POST.
+- La tarea corre dentro del proceso; no es una cola persistente. Un reinicio del contenedor interrumpe la ejecución y puede dejar el registro `running`, bloqueando nuevos jobs. Tras confirmar que ningún proceso sigue ejecutándolo, un operador debe marcarlo `failed` con fecha de finalización antes de reintentar.
+- No limpiar automáticamente los jobs activos al arrancar si puede haber otras instancias ejecutándolos. Para recuperación automática se necesita un worker con asignación persistente de trabajos y recuperación de ejecuciones interrumpidas.
+- Un fallo o reinicio puede dejar actualizaciones parciales de satélites. Una nueva ejecución puede sincronizarlas de nuevo. Antes de reintentar un POST tras un error de conexión, consultar el estado para evitar iniciar trabajos duplicados.
+
+
+
 ## [Unreleased] — Preparación para producción (2026-09-24)
 
 Cambios para servir el backend públicamente en `scorpio.cpsrtc.cl`, con la cadena

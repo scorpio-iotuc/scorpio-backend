@@ -1,0 +1,75 @@
+name: Scorpio CI
+on:
+  pull_request:
+    branches: [development, deploy, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Prisma validation/generation only; no database connection in this job.
+      DATABASE_URL: postgresql://scorpio_ci:ci_only_password@localhost:5432/scorpio_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0' # Keep aligned with Dockerfile.
+          cache: npm
+      # Install dependencies, validate Prisma schema, generate Prisma client, compile API 
+      # and seed, and run unit tests.
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Validate Prisma schema
+        run: npx prisma validate
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Compile API
+        run: npm run build
+      - name: Compile seed
+        run: npm run build:seed
+      - name: Run unit tests
+        run: npm test
+
+  docker:
+    name: Docker startup and migrations
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        # Validate if the Dockerfile is valid and buildable.
+      - name: Build production image
+        run: docker compose -p scorpio-ci -f docker-compose.ci.yml build api
+        # Validate if the API is healthy and migrations are applied.
+      - name: Start services and wait for healthchecks
+        run: docker compose -p scorpio-ci -f docker-compose.ci.yml up -d --wait --wait-timeout 180
+      - name: Verify HTTP health through published port
+        shell: bash
+        run: |
+          address=$(docker compose -p scorpio-ci -f docker-compose.ci.yml port api 3000)
+          for path in /health /api/health; do
+            body=$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 "http://${address}${path}")
+            printf '%s' "$body" | jq -e '.status == "ok"'
+          done
+        # Validate if the database migrations are applied and up to date.
+      - name: Verify migration status
+        run: docker compose -p scorpio-ci -f docker-compose.ci.yml exec -T api npx prisma migrate status
+        # Print diagnostics and remove containers/volumes on failure or completion.
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -p scorpio-ci -f docker-compose.ci.yml ps -a
+          docker compose -p scorpio-ci -f docker-compose.ci.yml logs --no-color --tail=200
+        # Finally, remove the containers and volumes to avoid resource leaks.
+      - name: Remove CI containers and volumes
+        if: always()
+        run: docker compose -p scorpio-ci -f docker-compose.ci.yml down --volumes --remove-orphans
