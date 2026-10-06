@@ -1,0 +1,11 @@
+[Unit]
+Description=Update SCORPIO satellite catalog
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=pedropablozavalat
+WorkingDirectory=${SCORPIO_ROOT}
+EnvironmentFile=/etc/scorpio/jobs/upsert_satellites.env
+ExecStart=/usr/bin/flock -n /run/lock/scorpio-upsert-satellites.lock ${SCORPIO_VENV}/bin/python ${SCORPIO_SCRIPT}

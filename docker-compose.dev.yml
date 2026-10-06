@@ -1,0 +1,44 @@
+name: scorpio-backend-dev
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define the POSTGRES_PASSWORD in dev.env}
+      POSTGRES_DB: ${POSTGRES_DB:-scorpio_dev}
+    env_file:
+      - dev.env
+    volumes:
+      - db_data_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "0.0.0.0:3000:3000"
+    env_file:
+      - dev.env
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-scorpio_dev}?schema=public"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data_dev:
+
+
+
+networks:
+  scorpio-net:
+    name: scorpio-net
+    external: true

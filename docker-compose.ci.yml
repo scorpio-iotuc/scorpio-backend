@@ -1,0 +1,39 @@
+# Standalone CI stack; do not merge with production Compose.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: scorpio_ci
+      POSTGRES_PASSWORD: ci_only_password
+      POSTGRES_DB: scorpio_ci
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U scorpio_ci -d scorpio_ci']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+      DATABASE_URL: postgresql://scorpio_ci:ci_only_password@db:5432/scorpio_ci?schema=public
+      JWT_SECRET: scorpio-ci-only-secret-not-for-production-0123456789
+      FRONTEND_URL: http://localhost
+      SIGNUP_MODE: admin
+      TRUST_PROXY_HOPS: '0'
+      SEED_ON_START: 'false'
+    ports:
+      - '127.0.0.1::3000'
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/health']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
