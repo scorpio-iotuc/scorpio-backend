@@ -83,6 +83,6 @@ This removes the CI containers, network and temporary database, not the developm
 
 ## Verify on GitHub
 
-Commit the workflow, Compose file, tests, application changes and migrations together. Open a pull request and inspect Checks or Actions. Pushes to `development` also run CI. Manual dispatch is available once the workflow exists on the default branch.
+Commit the workflow, Compose file, tests, application changes and migrations together. Open a pull request and inspect Checks or Actions. CI only runs on pull requests targeting `development`, `deploy` or `main`. To run the whole workflow locally without a pull request, see [Probar los workflows con act](CICD.md#probar-los-workflows-con-act).
 
 Local checks do not validate GitHub triggers, action permissions or runner-specific behavior; the first GitHub run verifies those. Configure branch protection to require both jobs if failed CI should prevent merges. CI does not deploy to the VM.

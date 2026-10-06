@@ -1,9 +1,9 @@
 name: Scorpio CD
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches:
       - deploy
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,22 +13,84 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deployment-trigger:
-    # TODO: Implement actual deployment to VM and health verification.
-    name: Deployment trigger only 
-    if: github.ref == 'refs/heads/deploy'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Record deployment candidate
+  deploy:
+    name: Deploy to VM
+    # Only PRs merged into deploy; closed-without-merge PRs are skipped.
+    if: github.event.pull_request.merged == true
+    # Self-hosted runner on the SCORPIO VM (user gh-runner, groups docker + scorpio-local).
+    runs-on: [self-hosted, scorpio-backend]
+    timeout-minutes: 20
+    env:
+      DEPLOY_DIR: /opt/SCORPIO/scorpio-backend
+      DEPLOY_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # The deploy checkout belongs to another user; trust it for git commands in this job.
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: /opt/SCORPIO/scorpio-backend
+    defaults:
+      run:
         shell: bash
+        working-directory: /opt/SCORPIO/scorpio-backend
+    steps:
+      # act mounts the host Docker socket: a local run would modify production. Use act only with -n.
+      - name: Refuse to run under act
+        run: |
+          if [ -n "${ACT:-}" ]; then
+            echo "::error::CD deploys to production; run it with act only as a dry-run (-n)."
+            exit 1
+          fi
+      # Refuse to overwrite local edits; .env and db_data are ignored and therefore allowed.
+      - name: Check deploy directory is clean
+        run: |
+          # Separate assignment so a git failure (e.g. not a repository) stops the job.
+          changes=$(git status --porcelain --untracked-files=no)
+          if [ -n "$changes" ]; then
+            echo "::error::$DEPLOY_DIR has uncommitted changes; commit or discard them before deploying."
+            git status --short --untracked-files=no
+            exit 1
+          fi
+      - name: Fetch merged commit
         env:
-          COMMIT_SHA: ${{ github.sha }}
-          EVENT_NAME: ${{ github.event_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)
+          GIT_CONFIG_COUNT=2 \
+          GIT_CONFIG_KEY_1=http.https://github.com/.extraheader \
+          GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
+            git fetch --no-tags origin deploy
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/deploy
+      - name: Check out merged commit
+        run: |
+          # Keep files group-writable for scorpio-local users.
+          umask 002
+          git checkout --detach "$DEPLOY_SHA"
+          git log -1 --oneline
+        # The entrypoint applies migrations; --wait requires db and api healthchecks to pass.
+      - name: Build and start containers
+        run: docker compose -f docker-compose.yml up -d --build --remove-orphans --wait --wait-timeout 300
+        # Checked from inside the container: the VM host cannot reach published Docker ports.
+      - name: Verify health and migrations
+        run: |
+          for path in /health /api/health; do
+            docker compose -f docker-compose.yml exec -T api wget -qO- "http://127.0.0.1:3000${path}" | grep -q '"status":"ok"'
+          done
+          docker compose -f docker-compose.yml exec -T api npx prisma migrate status
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker compose -f docker-compose.yml ps -a
+          docker compose -f docker-compose.yml logs --no-color --tail=200
+      - name: Record deployment
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
           {
-            echo '## CD trigger verified'
+            echo '## Backend deployment'
             echo
-            printf 'Event: `%s`\n\n' "$EVENT_NAME"
-            printf 'Candidate commit: `%s`\n\n' "$COMMIT_SHA"
+            printf 'Status: `%s`\n\n' "$JOB_STATUS"
+            printf 'Merged PR: #%s\n\n' "$PR_NUMBER"
+            printf 'Commit: `%s`\n\n' "$DEPLOY_SHA"
+            printf 'Checked out: `%s`\n\n' "$(git rev-parse HEAD)"
           } >> "$GITHUB_STEP_SUMMARY"
