@@ -14,7 +14,7 @@
 - Instrucciones para reproducir los checks, revisar logs, limpiar el entorno y activar los checks requeridos en GitHub: [Test CI workflow](DEVELOPMENT.md#test-ci-workflow).
 
 ### Despliegue continuo
-- Se incorpora `.github/workflows/cd.yml`, ejecutado solo cuando se mergea un PR en `deploy` (`pull_request` `closed` con `merged == true`). Corre en el runner self-hosted `scorpio-backend` de la VM: hace checkout del SHA del merge en `/opt/SCORPIO/scorpio-backend`, ejecuta `docker compose up -d --build --wait` y verifica `/health`, `/api/health` y `prisma migrate status`. Falla sin tocar nada si el directorio tiene cambios sin commitear.
+- Se incorpora `.github/workflows/cd.yml`, ejecutado solo cuando se mergea un PR en `deploy` (`pull_request_target` `closed` con `merged == true`; usa el `cd.yml` de `deploy`, así un PR no puede alterar los pasos de despliegue). Corre en el runner self-hosted `scorpio-backend` de la VM: hace checkout del SHA del merge en `/opt/SCORPIO/scorpio-backend`, ejecuta `docker compose up -d --build --wait` y verifica `/health`, `/api/health` y `prisma migrate status`. Falla sin tocar nada si el directorio tiene cambios sin commitear.
 
 ### Actualización de satélites en segundo plano
 

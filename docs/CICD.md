@@ -21,7 +21,7 @@ flowchart TD
     Docker -->|"Falla"| Block
     Docker -->|"Aprobado"| Rules["GitHub verifica checks y revisiones requeridas"]
     Rules --> Merge["Merge del PR a deploy"]
-    Merge --> Closed["Evento pull_request closed con merged = true"]
+    Merge --> Closed["Evento pull_request_target closed con merged = true"]
     Closed --> CD["CD en runner self-hosted: checkout del SHA del merge en /opt/SCORPIO/scorpio-backend"]
     CD --> Up["docker compose up -d --build --wait (el entrypoint aplica migraciones)"]
     Up --> Health["Verifica /health, /api/health y prisma migrate status"]
@@ -93,7 +93,7 @@ La activación real del ruleset se comprueba en GitHub; su existencia no se pued
 
 ### Cuándo se ejecuta
 
-- Con `pull_request` de tipo `closed` hacia `deploy`. El job solo corre si `github.event.pull_request.merged == true`; un PR cerrado sin merge se omite.
+- Con `pull_request_target` de tipo `closed` hacia `deploy` (ver [Seguridad](#seguridad-repos-públicos)). El job solo corre si `github.event.pull_request.merged == true`; un PR cerrado sin merge se omite.
 - No se dispara con pushes directos a `deploy` ni permite ejecución manual.
 
 ### Dónde corre
@@ -121,6 +121,25 @@ El despliegue opera directamente sobre `/opt/SCORPIO/scorpio-backend`, el mismo 
 La verificación se hace con `docker compose exec` porque en esta VM el host no alcanza los puertos publicados por Docker (ver [Limitaciones de act](#limitaciones-de-act)).
 
 El grupo de concurrencia `scorpio-cd-deploy` con `cancel-in-progress: false` impide dos despliegues simultáneos; no es una cola durable que garantice desplegar cada commit.
+
+### Seguridad (repos públicos)
+
+Los repos son públicos y el runner self-hosted corre como `gh-runner`, que pertenece al grupo `docker` (en la práctica, root en la VM) y tiene acceso a `/opt/SCORPIO` y a los `.env` productivos.
+
+- **`pull_request_target` en vez de `pull_request`.** Con `pull_request`, GitHub ejecuta el `cd.yml` del PR: un fork podría modificarlo (quitar el `if: merged`, cambiar los pasos) y su código correría en la VM al cerrarse el PR. Con `pull_request_target`, GitHub usa el `cd.yml` que ya está en `deploy`. El job nunca hace checkout del head del PR, solo de `merge_commit_sha`, que ya está en `deploy`.
+- **Límite:** esto no impide que un fork agregue un workflow **nuevo** con `runs-on: [self-hosted, scorpio-backend]` y `on: pull_request`. La protección contra eso es una configuración de GitHub, no del YAML.
+- **CI sigue en `ubuntu-latest`** por la misma razón: ejecuta código de PRs sin mergear.
+
+Configuración requerida en **Settings → Actions → General**:
+
+| Sección | Valor | Motivo |
+| --- | --- | --- |
+| Approval for running fork pull request workflows | **Require approval for all external contributors** | "First-time contributors" no basta: tras un primer PR mergeado, los siguientes PRs de esa persona ya no piden aprobación. No aprobar workflows de forks que modifiquen `.github/workflows`. |
+| Actions permissions | **Allow scorpio-iotuc, and select non-scorpio-iotuc, actions** + **Allow actions created by GitHub** | Solo se usan `actions/checkout` y `actions/setup-node`; bloquea actions de terceros. |
+| Workflow permissions | **Read repository contents and packages permissions** | Token de solo lectura por defecto para cualquier workflow. |
+| Workflow permissions | Desmarcar **Allow GitHub Actions to create and approve pull requests** | Evita que un workflow apruebe PRs y se salte el ruleset. |
+
+"Fork pull request workflows" (enviar secretos o tokens de escritura a forks) solo aplica a repos privados. La mitigación completa sería hacer los repos privados o mover los runners a un runner group de la organización restringido.
 
 ### Fallos y recuperación
 
@@ -160,11 +179,11 @@ Ejecutar desde la raíz del repositorio.
 
 ```bash
 # PR mergeado: lista los pasos de "Deploy to VM" (Check deploy directory is clean ... Record deployment)
-act pull_request -n -W .github/workflows/cd.yml -e .github/act-events/pr-merged-deploy.json \
+act pull_request_target -n -W .github/workflows/cd.yml -e .github/act-events/pr-merged-deploy.json \
   -P self-hosted=catthehacker/ubuntu:act-latest
 
 # PR cerrado sin merge: no planifica ningún paso
-act pull_request -n -W .github/workflows/cd.yml -e .github/act-events/pr-closed-deploy.json \
+act pull_request_target -n -W .github/workflows/cd.yml -e .github/act-events/pr-closed-deploy.json \
   -P self-hosted=catthehacker/ubuntu:act-latest
 ```
 
@@ -197,7 +216,7 @@ La copia también evita que los contenedores de act dejen `node_modules` o `dist
 
 ### Limitaciones de act
 
-- **Ignora los filtros `branches:` de `pull_request`.** Con act, CI y CD corren aunque el PR simulado apunte a otra rama. Esos filtros solo se comprueban en GitHub. La condición `merged == true` de CD sí se evalúa.
+- **Ignora los filtros `branches:` de `pull_request` y `pull_request_target`.** Con act, CI y CD corren aunque el PR simulado apunte a otra rama. Esos filtros solo se comprueban en GitHub. La condición `merged == true` de CD sí se evalúa.
 - No valida rulesets, checks requeridos, permisos del `GITHUB_TOKEN` ni comportamiento propio de los runners de GitHub.
 - **En la VM de SCORPIO, el paso `Verify HTTP health through published port` falla con `curl: (56) Connection reset by peer`.** No es un error del workflow: en esta VM el host no alcanza ningún puerto publicado por Docker (tampoco `127.0.0.1:3000` de la API productiva ni un contenedor nginx de prueba), aunque la comunicación entre contenedores por `scorpio-net` funciona. Es un tema de firewall/red del host (ufw/iptables con el bridge de Docker) a revisar con el administrador. Por eso CD verifica la salud desde dentro de los contenedores. Mientras tanto, en esta VM usar act para `-j validate` y confiar en GitHub para el job Docker, o comprobar la salud desde dentro de la red: `docker compose -p scorpio-ci -f docker-compose.ci.yml exec -T api wget -qO- http://127.0.0.1:3000/health`.
 - La comprobación definitiva sigue siendo un PR real, por ejemplo un cambio menor de documentación hacia `development`.
