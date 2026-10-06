@@ -126,7 +126,8 @@ El grupo de concurrencia `scorpio-cd-deploy` con `cancel-in-progress: false` imp
 
 Los repos son públicos y el runner self-hosted corre como `gh-runner`, que pertenece al grupo `docker` (en la práctica, root en la VM) y tiene acceso a `/opt/SCORPIO` y a los `.env` productivos.
 
-- **`pull_request_target` en vez de `pull_request`.** Con `pull_request`, GitHub ejecuta el `cd.yml` del PR: un fork podría modificarlo (quitar el `if: merged`, cambiar los pasos) y su código correría en la VM al cerrarse el PR. Con `pull_request_target`, GitHub usa el `cd.yml` que ya está en `deploy`. El job nunca hace checkout del head del PR, solo de `merge_commit_sha`, que ya está en `deploy`.
+- **`pull_request_target` en vez de `pull_request`.** Con `pull_request`, GitHub ejecuta el `cd.yml` del PR: un fork podría modificarlo (quitar el `if: merged`, cambiar los pasos) y su código correría en la VM al cerrarse el PR. Con `pull_request_target`, GitHub usa el `cd.yml` de la **rama predeterminada (`main`)**, no el del PR ni el de `deploy`. El job nunca hace checkout del head del PR, solo de `merge_commit_sha`, que ya está en `deploy`.
+- **Consecuencia: `cd.yml` debe estar en `main`.** Si `main` no tiene el workflow, mergear en `deploy` no dispara nada (ni siquiera aparece un run omitido). Un cambio a `cd.yml` solo tiene efecto cuando llega a `main`, normalmente con un PR `deploy` → `main` después de mergear en `deploy`.
 - **Límite:** esto no impide que un fork agregue un workflow **nuevo** con `runs-on: [self-hosted, scorpio-backend]` y `on: pull_request`. La protección contra eso es una configuración de GitHub, no del YAML.
 - **CI sigue en `ubuntu-latest`** por la misma razón: ejecuta código de PRs sin mergear.
 

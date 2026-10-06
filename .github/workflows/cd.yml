@@ -1,7 +1,8 @@
 name: Scorpio CD
 on:
-  # pull_request_target runs this file as it exists on deploy, so a PR cannot alter the
-  # deploy steps. Never check out the PR head here; only the merge commit already on deploy.
+  # pull_request_target runs this file as it exists on the default branch (main), so a PR
+  # cannot alter the deploy steps. Changes to this file only take effect once merged into main.
+  # Never check out the PR head here; only the merge commit already on deploy.
   pull_request_target:
     types: [closed]
     branches:
