@@ -89,22 +89,4 @@ Commit the workflow, Compose file, tests, application changes and migrations tog
 
 Local checks do not validate GitHub triggers, action permissions or runner-specific behavior; the first GitHub run verifies those. Configure branch protection to require both jobs if failed CI should prevent merges. CI does not deploy to the VM.
 
-
-
-----
-# Test Jobs 
-
-Example of execution of the script to upsert satellites in the database. This command runs the script in a temporary container, without starting the API or other services. It uses the development environment variables, so it can connect to the local database.
-
-```bash
-
-docker compose \
-  --env-file dev.env \
-  -f docker-compose.dev.yml \
-  run --rm \
-  --no-deps \
-  --entrypoint python \
-  jobs \
-  -u /app/upsert_satellites.py
-
-  
+Satellite worker scheduling, configuration and rollout: [Unreleased changelog](CHANGELOG.md#unreleased--worker-de-satelites-y-logs-2026-10-07).

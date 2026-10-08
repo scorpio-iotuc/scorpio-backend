@@ -4,9 +4,9 @@ import type { SatelliteUpsertJobResponseDTO } from '../dto/SatelliteUpsertJobRes
 import type { SatelliteUpsertJobRepository } from './SatelliteUpsertJobRepository';
 
 export class PrismaSatelliteUpsertJobRepository implements SatelliteUpsertJobRepository {
-  async createRunning(): Promise<SatelliteUpsertJobResponseDTO | null> {
+  async createQueued(scheduleKey?: string): Promise<SatelliteUpsertJobResponseDTO | null> {
     try {
-      return await prisma.satelliteUpsertJob.create({ data: {} });
+      return await prisma.satelliteUpsertJob.create({ data: { status: 'queued', schedule_key: scheduleKey } });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         return null;

@@ -1,9 +1,12 @@
+import { Logger } from '../../../lib/Logger';
 import type { SatelliteUpsertJobRepository } from '../repositories/SatelliteUpsertJobRepository';
+
+const logger = new Logger('Satellites');
 
 export class GetSatelliteUpsertJob {
   constructor(private readonly jobs: SatelliteUpsertJobRepository) {}
   execute() {
-    console.log('[Satellites][UPSERT] Searching the last job executed')
+    logger.info('UPSERT: Searching the last job executed')
     return this.jobs.findLatest();
   }
 }

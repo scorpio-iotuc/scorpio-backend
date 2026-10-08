@@ -1,6 +1,9 @@
+import { Logger } from '../../../lib/Logger';
 import { UpsertSatellitesResultDTO } from '../dto/UpsertSatellitesResultDTO';
 import { SatelliteRepository } from '../repositories/SatelliteRepository';
 import { CelesTrakClient } from '../services/CelesTrakClient';
+
+const logger = new Logger('Satellites');
 
 interface CelesTrakSatelliteRecord {
   NORAD_CAT_ID: number | string;
@@ -140,7 +143,7 @@ export class UpsertSatellites {
   async upsertSatellites(onDownloaded?: () => Promise<void>): Promise<UpsertSatellitesResultDTO> {
     const startedAt = Date.now();
 
-    console.log('[Satellites][UPSERT] Downloading active satellites from CelesTrak');
+    logger.info('UPSERT: Downloading active satellites from CelesTrak');
 
     try {
       const responseBody = await this.celestrakClient.downloadActiveSatellites();
@@ -150,7 +153,7 @@ export class UpsertSatellites {
 
       const elapsedMs = Date.now() - startedAt;
 
-      console.log('[Satellites][UPSERT] Synchronization completed', {
+      logger.info('UPSERT: Synchronization completed', {
         downloaded: result.downloaded,
         created: result.created,
         updated: result.updated,
@@ -159,7 +162,7 @@ export class UpsertSatellites {
 
       return result;
     } catch (error) {
-      console.error('[Satellites][UPSERT] Failed to synchronize satellites', error);
+      logger.error('UPSERT: Failed to synchronize satellites', error);
 
       const message = error instanceof Error ? error.message : 'Unexpected error. check the logs for more details';
       throw new Error(`Failed to synchronize satellites from CelesTrak: ${message}`);

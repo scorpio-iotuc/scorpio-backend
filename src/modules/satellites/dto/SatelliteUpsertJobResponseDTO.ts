@@ -1,4 +1,4 @@
-export type SatelliteUpsertJobStatus = 'running' | 'completed' | 'failed';
+export type SatelliteUpsertJobStatus = 'queued' | 'running' | 'completed' | 'failed';
 
 export interface SatelliteUpsertJobResponseDTO {
   id: string;

@@ -13,7 +13,8 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.9.2",
     "ts-node": "^10.9.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "@types/pg": "^8.20.0"
   },
   "scripts": {
     "test": "node --test tests/*.test.cjs",
@@ -21,7 +22,9 @@
     "build": "tsc",
     "start:prod": "node dist/server.js",
     "seed": "prisma db seed",
-    "build:seed": "tsc -p tsconfig.seed.json"
+    "build:seed": "tsc -p tsconfig.seed.json",
+    "worker": "ts-node src/jobs/upsert_satellites_points.ts",
+    "worker:prod": "node dist/jobs/upsert_satellites_points.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",
@@ -34,6 +37,7 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "prisma": "^7.8.0",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "pg": "^8.21.0"
   }
 }

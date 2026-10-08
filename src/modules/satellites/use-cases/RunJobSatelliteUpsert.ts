@@ -1,31 +1,16 @@
+import { Logger } from '../../../lib/Logger';
 import type { SatelliteUpsertJobRepository } from '../repositories/SatelliteUpsertJobRepository';
-import type { UpsertSatellites } from './UpsertSatellites';
 
+const logger = new Logger('Satellites');
+
+// HTTP requests only enqueue; the standalone worker owns execution.
 export class RunJobSatelliteUpsert {
-  constructor(
-    private readonly jobs: SatelliteUpsertJobRepository,
-    private readonly upsert: Pick<UpsertSatellites, 'execute'>,
-  ) {}
+  constructor(private readonly jobs: SatelliteUpsertJobRepository) {}
 
   async execute() {
-    const job = await this.jobs.createRunning();
-    if (!job) return null;
-    // Starting the asynchronous job here ...
-    setImmediate(() => {
-      void this.runJobSatelliteUpsert(job.id).catch((error) => {
-        console.error('[Satellites][JOB] Could not persist job failure', { jobId: job.id, error });
-      });
-    });
+    const job = await this.jobs.createQueued();
+    if (job) logger.info('Import queued', { jobId: job.id });
+    else logger.info('Import request skipped: a job is already queued or running');
     return job;
-  }
-
-  async runJobSatelliteUpsert(jobId: string): Promise<void> {
-    try {
-      await this.upsert.execute(() => this.jobs.markDownloaded(jobId));
-      await this.jobs.complete(jobId);
-    } catch (error) {
-      console.error('[Satellites][JOB] Synchronization failed', { jobId, error });
-      await this.jobs.fail(jobId, 'Satellite synchronization failed. Check server logs.');
-    }
   }
 }

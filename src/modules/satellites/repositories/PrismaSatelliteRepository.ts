@@ -139,9 +139,9 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
     const satellitesToCreate = satellites.filter((satellite) => !existingNoradIds.has(satellite.noradId));
     const satellitesToUpdate = satellites.filter((satellite) => existingNoradIds.has(satellite.noradId));
 
-    if (satellitesToCreate.length > 0) {
+    for (const batch of chunk(satellitesToCreate, UPDATE_BATCH_SIZE)) {
       await prisma.satellite.createMany({
-        data: satellitesToCreate.map(toPrismaSatellite),
+        data: batch.map(toPrismaSatellite),
         skipDuplicates: true,
       });
     }

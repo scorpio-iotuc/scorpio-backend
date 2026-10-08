@@ -54,6 +54,32 @@ services:
           cpus: '0.25'
           memory: 256M
 
+  jobs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["worker"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}?schema=public
+      UPSERT_SATELLITES_TRIGGER_TIME: "${UPSERT_SATELLITES_TRIGGER_TIME:-00:00}"
+      RUN_ON_START: "${RUN_ON_START:-false}"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - scorpio-net
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
 networks:
   scorpio-net:
     name: scorpio-net

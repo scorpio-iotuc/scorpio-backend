@@ -1,6 +1,87 @@
 # Changelog
 
+## [Unreleased] — Worker de satélites y logs (2026-10-07)
+
+### Cola persistente y servicio Jobs
+
+- Se incorpora el servicio `jobs` en `docker-compose.yml` y `docker-compose.dev.yml`. Usa el mismo Dockerfile que la API, pero ejecuta un proceso independiente; la importación ya no ocupa el event loop de la API.
+- La tarea TypeScript `src/jobs/upsert_satellites_points.ts` reemplaza los scripts Python y el despliegue del directorio raíz `jobs/`. Reutiliza `UpsertSatellites`, los repositorios y Prisma para extraer y guardar datos de CelesTrak.
+- Se agregan las tareas npm `npm run worker` (TypeScript local) y `npm run worker:prod` (JavaScript compilado). En Compose, `command: ["worker"]` selecciona el proceso correspondiente.
+- `POST /api/satellites/upsert` solo registra un job `queued` y responde **202**; devuelve **409** si ya existe un job activo. `GET /api/satellites/upsert` solo consulta el último registro: no modifica jobs ni ejecuta la importación. Ambos mantienen la autorización de administrador.
+- Las migraciones `20261008010000_satellite_job_queue` y `20261008010100_satellite_job_queue_index` incorporan `queued`, una clave diaria única y la restricción de un único job entre `queued` y `running`.
+- El worker reclama jobs, ejecuta la descarga y persistencia, y registra `completed` o `failed`. Un lock de sesión PostgreSQL permite un solo worker activo; su sucesor marca como fallidas las ejecuciones interrumpidas.
+- Las inserciones se dividen en lotes de 500 filas y la descarga tiene un plazo de dos minutos. El dataset completo aún se mantiene en memoria; esto no garantiza ausencia de contención en el host o PostgreSQL.
+- Se agregan pruebas de encolado, estados de éxito/error y horario UTC. Ejecutar `npm test` desde la raíz; son pruebas unitarias sin descargas ni conexión a PostgreSQL.
+
+### Logs centralizados
+
+- Se agrega `src/lib/Logger.ts` con métodos `info`, `warn`, `error` y `debug`, un servicio definido al crear el logger y fecha ISO 8601 en UTC por evento.
+- API, controladores, casos de uso de satélites y worker reemplazan sus llamadas directas a consola. Se conservan los logs de los casos de uso y se registra el resultado de encolar una importación.
+- Cada evento ocupa una línea; el contexto conserva objetos y detalles de errores, incluidos stacks. Los errores y advertencias van a stderr; info/debug a stdout. No requiere `docker compose logs --timestamps` ni agrega logging de cuerpos HTTP o credenciales.
+
+```text
+[2026-10-08T00:00:00.000Z] [INFO] [Satellites] Import queued { jobId: '...' }
+```
+
+### Configuración, ejecución y despliegue del worker
+
+Satellite automation is implemented in `src/jobs/upsert_satellites_points.ts`.
+The `api` and `jobs` services build the same Dockerfile but start separate processes.
+The root Python `jobs/` deployment and Python API-calling script are retired.
+No automation user/password or separate Python image is required.
+
+#### Development
+
+```bash
+docker compose --env-file dev.env -f docker-compose.dev.yml up -d --build api jobs
+docker compose --env-file dev.env -f docker-compose.dev.yml logs -f jobs
+```
+
+Configure `UPSERT_SATELLITES_TRIGGER_TIME=00:00` (HH:MM UTC) and
+`RUN_ON_START=false` in the Compose interpolation environment (`dev.env` for the
+command above; `.env` in production). The worker checks every two seconds while
+idle and executes one import at a time. Daily scheduling catches up today's run
+when started after its trigger time, even with RUN_ON_START=false. A unique daily
+key prevents the same scheduled run from being enqueued again after a restart.
+A failed daily run is not automatically retried that day; use the admin POST to
+retry. RUN_ON_START=true additionally requests an unscheduled import unless the
+latest job finished within the past hour. An active job prevents duplicates.
+
+POST /api/satellites/upsert now returns 202 with status `queued`; GET on the same
+path returns its status. Clients must treat both `queued` and `running` as pending.
+The worker changes started_at when execution actually begins. The single-active
+job index applies to both statuses. When no worker is available, jobs stay queued.
+
+#### Production rollout
+
+Stop the old API and any Python/systemd automation before migration: old API
+processes must not keep executing imports alongside the new worker. Then rebuild
+and recreate `api` and `jobs` with production Compose. The API applies migrations;
+the worker waits for API health and does not run migrations itself. Stop rather
+than delete the database service/data. Reload frontend Nginx after API replacement
+so it resolves the current API container address.
+
+Only the worker holding a PostgreSQL session advisory lock executes jobs. On
+startup it marks pre-existing running jobs failed; it never silently retries them.
+The lock is released on connection closure. On shutdown during an import the worker
+exits and leaves the job for that recovery step. Inserts/updates already committed
+remain and can be upserted on the next manual run. A worker fatal database error
+exits for Docker to restart it. This is not an overall import deadline or a full
+worker readiness monitor: inspect worker logs and pending job age.
+
+The worker has no HTTP server, so the API image's HTTP healthcheck is disabled for
+that service. Production caps worker CPU at 0.5 and memory at 512 MiB; these are
+additional container limits, not a shared 512 MiB budget. Confirm host capacity
+before deploying. The API and database retain their existing limits. Import
+inserts are batched at 500 rows and the CelesTrak download has a two-minute deadline.
+The complete download/parsed dataset is still held in memory; profile resource
+usage on the real dataset. Separating execution does not resolve all shared-host
+or database contention.
+
+
 ## [Unreleased] Release: CI y jobs de satélites (2026-10-02)
+
+> El diseño de ejecución en el proceso de la API descrito aquí queda reemplazado por el worker y la cola de la entrada 2026-10-07.
 
 ### Integración continua
 
@@ -24,11 +105,6 @@
 - El modelo `SatelliteUpsertJob` persiste los estados enum `running`, `completed` y `failed`. `downloaded` pasa a `true` al finalizar la descarga HTTP; no garantiza datos válidos ni una actualización exitosa de la base.
 - `created` y `updated` son fechas del job, no cantidades de satélites. `finished_at` y `error_message` admiten `null`.
 - La migración `20261002180000_satellite_upsert_jobs` incluye un índice único parcial para permitir un solo job activo, incluso entre varias instancias de la API.
-
-### Jobs actualizacion de satelites (upsert)
-
-- Se agrega el script
-
 
 ### Migración y operación
 
