@@ -1,9 +1,15 @@
-import type { SatelliteUpsertJobResponseDTO } from '../dto/SatelliteUpsertJobResponseDTO';
+import type { SatelliteUpsertJobResponseDTO } from "../dto/SatelliteUpsertJobResponseDTO";
+import type { ListUpsertSatelliteJobsDTO } from "../dto/ListUpsertSatelliteJobsDTO";
 
 export interface SatelliteUpsertJobRepository {
-  createQueued(scheduleKey?: string): Promise<SatelliteUpsertJobResponseDTO | null>;
+  createQueued(
+    scheduleKey?: string,
+  ): Promise<SatelliteUpsertJobResponseDTO | null>;
   findLatest(): Promise<SatelliteUpsertJobResponseDTO | null>;
   markDownloaded(id: string): Promise<void>;
   complete(id: string): Promise<void>;
   fail(id: string, message: string): Promise<void>;
+  findAll(
+    query: ListUpsertSatelliteJobsDTO,
+  ): Promise<SatelliteUpsertJobResponseDTO[]>;
 }

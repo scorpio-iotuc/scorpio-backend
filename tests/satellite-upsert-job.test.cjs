@@ -2,7 +2,7 @@ require('ts-node/register');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { RunJobSatelliteUpsert } = require('../src/modules/satellites/use-cases/RunJobSatelliteUpsert');
-const { executeSatelliteJob } = require('../src/jobs/execute-satellite-job');
+const { executeSatelliteJob } = require('../src/jobs/upsert-satellite/execute-job');
 const { scheduleKey } = require('../src/jobs/schedule');
 const { GetSatelliteUpsertJob } = require('../src/modules/satellites/use-cases/GetSatelliteUpsertJob');
 
@@ -41,7 +41,7 @@ test('does not launch synchronization when an active job exists', async () => {
 
 test('records download failure without claiming download succeeded', async () => {
   const { job, jobs } = fixture();
-  await executeSatelliteJob(job.id, jobs, { execute: async () => { throw new Error('download failed'); } });
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, { streamActiveSatellites: async () => { throw new Error('download failed'); } });
   assert.equal(job.status, 'failed');
   assert.equal(job.downloaded, false);
 });
@@ -49,8 +49,8 @@ test('records download failure without claiming download succeeded', async () =>
 test('retains downloaded flag when persistence fails afterwards', async () => {
   const { job, jobs } = fixture();
   await executeSatelliteJob(job.id, jobs, {
-    execute: async (onDownloaded) => { await onDownloaded(); throw new Error('database failed'); },
-  });
+    execute: async () => { throw new Error('database failed'); },
+  }, { streamActiveSatellites: async (save, downloaded) => { await downloaded(); await save([]); } });
   assert.equal(job.status, 'failed');
   assert.equal(job.downloaded, true);
 });
@@ -65,7 +65,7 @@ test('GET use case returns the latest record or null without starting work', asy
 
 test('worker records download before completion', async () => {
   const { job, jobs, events } = fixture();
-  await executeSatelliteJob(job.id, jobs, { execute: async (downloaded) => downloaded() });
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, { streamActiveSatellites: async (_save, downloaded) => downloaded() });
   assert.deepEqual(events, ['downloaded', 'completed']);
   assert.equal(job.status, 'completed');
 });

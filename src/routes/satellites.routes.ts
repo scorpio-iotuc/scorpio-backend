@@ -13,6 +13,7 @@ export const buildSatellitesRoutes = (): Router => {
   router.get('/', satelliteController.list);
   router.get('/upsert', authMiddleware, requireAdmin, satelliteController.getUpsert);
   router.post('/upsert', authMiddleware, requireAdmin, satelliteController.upsert);
+  router.get('/upsert/jobs', authMiddleware, requireAdmin, satelliteController.listJobs);
 
   return router;
 };
