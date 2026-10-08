@@ -1,3 +1,4 @@
+import { Logger } from '../../../lib/Logger';
 import { Request, Response } from 'express';
 import { CreateStationDTO } from '../dto/CreateStationDTO';
 import { ListStationsDTO } from '../dto/ListStationsDTO';
@@ -9,6 +10,8 @@ import { ListStations } from '../use-cases/ListStations';
 import { RegenerateStationKey } from '../use-cases/RegenerateStationKey';
 import { UpdateStation } from '../use-cases/UpdateStation';
 import { PacketRepository } from '../../packets/repositories/PacketRepository';
+
+const logger = new Logger('Stations');
 
 const isFiniteNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 
@@ -74,7 +77,7 @@ export class StationController {
       }
       return res.status(201).json(stationCredentials);
     } catch (error) {
-      console.error('[Stations][CREATE] Failed to create station', error);
+      logger.error('CREATE: Failed to create station', error);
       return res.status(500).json({ message: 'Unexpected error. check the logs for more details' });
     }
   };

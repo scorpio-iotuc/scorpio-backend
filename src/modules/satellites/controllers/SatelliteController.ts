@@ -1,9 +1,7 @@
 import { Request, Response } from 'express';
 import { ListSatellitesDTO } from '../dto/ListSatellitesDTO';
 import { SatelliteRepository } from '../repositories/SatelliteRepository';
-import { CelesTrakClient } from '../services/CelesTrakClient';
 import { ListSatellites } from '../use-cases/ListSatellites';
-import { UpsertSatellites } from '../use-cases/UpsertSatellites';
 import { SatelliteUpsertJobRepository } from '../repositories/SatelliteUpsertJobRepository';
 import { GetSatelliteUpsertJob } from '../use-cases/GetSatelliteUpsertJob';
 import { RunJobSatelliteUpsert } from '../use-cases/RunJobSatelliteUpsert';
@@ -16,22 +14,20 @@ export class SatelliteController {
 
   constructor(
     satelliteRepository: SatelliteRepository,
-    celestrakClient: CelesTrakClient,
     jobRepository: SatelliteUpsertJobRepository,
   ) {
     this.listSatellites = new ListSatellites(satelliteRepository);
     this.runJobSatelliteUpsert = new RunJobSatelliteUpsert(
-      jobRepository, new UpsertSatellites(satelliteRepository, celestrakClient),
+      jobRepository,
     );
     this.getSatelliteUpsertJob = new GetSatelliteUpsertJob(jobRepository);
   }
 
   public static build(
     satelliteRepository: SatelliteRepository,
-    celestrakClient: CelesTrakClient,
     jobRepository: SatelliteUpsertJobRepository,
   ): SatelliteController {
-    return new SatelliteController(satelliteRepository, celestrakClient, jobRepository);
+    return new SatelliteController(satelliteRepository, jobRepository);
   }
 
   list = async (req: Request, res: Response): Promise<Response> => {
@@ -74,7 +70,7 @@ export class SatelliteController {
   upsert = async (_req: Request, res: Response): Promise<Response> => {
     const job = await this.runJobSatelliteUpsert.execute();
     if (!job) {
-      return res.status(409).json({ message: 'A satellite update is already running.' });
+      return res.status(409).json({ message: 'A satellite update is already queued or running.' });
     }
     return res.status(202).json(job);
   };
