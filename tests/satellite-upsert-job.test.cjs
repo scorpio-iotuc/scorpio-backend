@@ -2,13 +2,15 @@ require('ts-node/register');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { RunJobSatelliteUpsert } = require('../src/modules/satellites/use-cases/RunJobSatelliteUpsert');
+const { executeSatelliteJob } = require('../src/jobs/upsert-satellite/execute-job');
+const { scheduleKey } = require('../src/jobs/schedule');
 const { GetSatelliteUpsertJob } = require('../src/modules/satellites/use-cases/GetSatelliteUpsertJob');
 
 function fixture() {
   const job = { id: 'job-1', status: 'running', downloaded: false };
   const events = [];
   const jobs = {
-    createRunning: async () => job,
+    createQueued: async () => job,
     findLatest: async () => job,
     markDownloaded: async () => { job.downloaded = true; events.push('downloaded'); },
     complete: async () => { job.status = 'completed'; events.push('completed'); },
@@ -17,27 +19,21 @@ function fixture() {
   return { job, jobs, events };
 }
 
-test('accepts before synchronization finishes and records completion afterwards', async () => {
+test('API enqueues without running the import', async () => {
   const { job, jobs, events } = fixture();
-  let finish;
-  const pending = new Promise((resolve) => { finish = resolve; });
-  const runner = new RunJobSatelliteUpsert(jobs, {
-    execute: async (onDownloaded) => { await pending; await onDownloaded(); },
-  });
+  job.status = 'queued';
+  const runner = new RunJobSatelliteUpsert(jobs);
   assert.equal(await runner.execute(), job);
   await new Promise(setImmediate);
-  assert.equal(job.status, 'running');
+  assert.equal(job.status, 'queued');
   assert.deepEqual(events, []);
-  finish();
-  await new Promise(setImmediate);
-  assert.deepEqual(events, ['downloaded', 'completed']);
 });
 
 test('does not launch synchronization when an active job exists', async () => {
   const { jobs } = fixture();
-  jobs.createRunning = async () => null;
+  jobs.createQueued = async () => null;
   let calls = 0;
-  const runner = new RunJobSatelliteUpsert(jobs, { execute: async () => { calls++; } });
+  const runner = new RunJobSatelliteUpsert(jobs);
   assert.equal(await runner.execute(), null);
   await new Promise(setImmediate);
   assert.equal(calls, 0);
@@ -45,18 +41,16 @@ test('does not launch synchronization when an active job exists', async () => {
 
 test('records download failure without claiming download succeeded', async () => {
   const { job, jobs } = fixture();
-  const runner = new RunJobSatelliteUpsert(jobs, { execute: async () => { throw new Error('download failed'); } });
-  await runner.runJobSatelliteUpsert(job.id);
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, { streamActiveSatellites: async () => { throw new Error('download failed'); } });
   assert.equal(job.status, 'failed');
   assert.equal(job.downloaded, false);
 });
 
 test('retains downloaded flag when persistence fails afterwards', async () => {
   const { job, jobs } = fixture();
-  const runner = new RunJobSatelliteUpsert(jobs, {
-    execute: async (onDownloaded) => { await onDownloaded(); throw new Error('database failed'); },
-  });
-  await runner.runJobSatelliteUpsert(job.id);
+  await executeSatelliteJob(job.id, jobs, {
+    execute: async () => { throw new Error('database failed'); },
+  }, { streamActiveSatellites: async (save, downloaded) => { await downloaded(); await save([]); } });
   assert.equal(job.status, 'failed');
   assert.equal(job.downloaded, true);
 });
@@ -67,4 +61,21 @@ test('GET use case returns the latest record or null without starting work', asy
   assert.equal(await get.execute(), job);
   jobs.findLatest = async () => null;
   assert.equal(await get.execute(), null);
+});
+
+test('worker records download before completion', async () => {
+  const { job, jobs, events } = fixture();
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, { streamActiveSatellites: async (_save, downloaded) => downloaded() });
+  assert.deepEqual(events, ['downloaded', 'completed']);
+  assert.equal(job.status, 'completed');
+});
+
+test('UTC schedule handles boundary, catch-up, and rejects malformed times', () => {
+  assert.equal(scheduleKey(new Date('2026-10-08T01:59:59Z'), '02:00'), null);
+  assert.equal(scheduleKey(new Date('2026-10-08T02:00:00Z'), '02:00'), '2026-10-08');
+  assert.equal(scheduleKey(new Date('2026-10-08T23:59:00Z'), '02:00'), '2026-10-08');
+  assert.equal(scheduleKey(new Date('2026-10-09T00:00:00Z'), '02:00'), null);
+  for (const value of ['24:00', '12:60', 'bad']) {
+    assert.throws(() => scheduleKey(new Date(), value), /HH:MM/);
+  }
 });

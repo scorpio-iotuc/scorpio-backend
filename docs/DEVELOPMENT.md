@@ -2,7 +2,9 @@
 ```bash
 docker compose --env-file dev.env -f docker-compose.dev.yml up --build -d
 ```
-
+```bash
+docker compose --env-file dev.env -f docker-compose.dev.yml logs 
+```
 Stop the services
 ```bash 
 
@@ -86,3 +88,5 @@ This removes the CI containers, network and temporary database, not the developm
 Commit the workflow, Compose file, tests, application changes and migrations together. Open a pull request and inspect Checks or Actions. CI only runs on pull requests targeting `development`, `main` or `main`. To run the whole workflow locally without a pull request, see [Probar los workflows con act](CICD.md#probar-los-workflows-con-act).
 
 Local checks do not validate GitHub triggers, action permissions or runner-specific behavior; the first GitHub run verifies those. Configure branch protection to require both jobs if failed CI should prevent merges. CI does not deploy to the VM.
+
+Satellite worker scheduling, configuration and rollout: [Unreleased changelog](CHANGELOG.md#unreleased--worker-de-satelites-y-logs-2026-10-07).

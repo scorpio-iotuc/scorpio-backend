@@ -1,3 +1,4 @@
+import { Logger } from './lib/Logger';
 import express, { NextFunction, Request, Response, Router } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -11,6 +12,8 @@ import { buildSatellitesRoutes } from './routes/satellites.routes';
 import { buildPacketRoutes } from './routes/packets.routes';
 import { buildStatsRoutes } from './routes/stats.routes';
 import buildAuthRoutes from './routes/auth.routes';
+
+const logger = new Logger('API');
 
 
 const app = express();
@@ -78,16 +81,16 @@ app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (typeof error === 'object' && error !== null && (error as { type?: string }).type === 'entity.too.large') {
     return res.status(413).json({ message: 'Request body too large' });
   }
-  console.error('[API] Unhandled error', error);
+  logger.error('Unhandled error', error);
   return res.status(500).json({ message: 'Internal error' });
 });
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`[API] Service running at http://localhost:${port}`);
+  logger.info(`Service running at http://localhost:${port}`);
 });
 
 const shutdown = (signal: string): void => {
-  console.log(`[API] ${signal} received, shutting down`);
+  logger.info(`${signal} received, shutting down`);
   io.close();
   server.close(() => {
     prisma.$disconnect().finally(() => process.exit(0));

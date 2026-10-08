@@ -1,11 +1,14 @@
-import { Prisma, type Satellite as PrismaSatellite } from '../../../generated/prisma/client';
-import { prisma } from '../../../lib/prisma';
-import { ListSatellitesDTO } from '../dto/ListSatellitesDTO';
-import { ListSatellitesResponseDTO } from '../dto/ListSatellitesResponseDTO';
-import { UpsertSatelliteDTO } from '../dto/UpsertSatelliteDTO';
-import { UpsertSatellitesResultDTO } from '../dto/UpsertSatellitesResultDTO';
-import { Satellite } from '../entities/Satellite';
-import { SatelliteRepository } from './SatelliteRepository';
+import {
+  Prisma,
+  type Satellite as PrismaSatellite,
+} from "../../../generated/prisma/client";
+import { prisma } from "../../../lib/prisma";
+import { ListSatellitesDTO } from "../dto/ListSatellitesDTO";
+import { ListSatellitesResponseDTO } from "../dto/ListSatellitesResponseDTO";
+import { UpsertSatelliteDTO } from "../dto/UpsertSatelliteDTO";
+import { UpsertSatellitesResultDTO } from "../dto/UpsertSatellitesResultDTO";
+import { Satellite } from "../entities/Satellite";
+import { SatelliteRepository } from "./SatelliteRepository";
 
 const UPDATE_BATCH_SIZE = 500;
 
@@ -76,10 +79,10 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
             mode: "insensitive",
           },
           norad_id: noradId,
-        }
+        },
       }),
       prisma.satellite.findMany({
-        orderBy: { display_name: 'asc' },
+        orderBy: { display_name: "asc" },
         skip,
         take: limit,
         where: {
@@ -88,7 +91,7 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
             mode: "insensitive",
           },
           norad_id: noradId,
-        }
+        },
       }),
     ]);
 
@@ -116,7 +119,9 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
     return toDomainSatellite(satellite);
   }
 
-  async upsertMany(satellites: UpsertSatelliteDTO[]): Promise<UpsertSatellitesResultDTO> {
+  async upsertMany(
+    satellites: UpsertSatelliteDTO[],
+  ): Promise<UpsertSatellitesResultDTO> {
     if (satellites.length === 0) {
       return { downloaded: 0, created: 0, updated: 0 };
     }
@@ -134,23 +139,50 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
       },
     });
 
-    const existingNoradIds = new Set(existingSatellites.map((satellite: { norad_id: number }) => satellite.norad_id));
+    const existingNoradIds = new Set(
+      existingSatellites.map(
+        (satellite: { norad_id: number }) => satellite.norad_id,
+      ),
+    );
 
-    const satellitesToCreate = satellites.filter((satellite) => !existingNoradIds.has(satellite.noradId));
-    const satellitesToUpdate = satellites.filter((satellite) => existingNoradIds.has(satellite.noradId));
+    const satellitesToCreate = satellites.filter(
+      (satellite) => !existingNoradIds.has(satellite.noradId),
+    );
+    const satellitesToUpdate = satellites.filter((satellite) =>
+      existingNoradIds.has(satellite.noradId),
+    );
 
-    if (satellitesToCreate.length > 0) {
+    for (const batch of chunk(satellitesToCreate, UPDATE_BATCH_SIZE)) {
       await prisma.satellite.createMany({
-        data: satellitesToCreate.map(toPrismaSatellite),
+        data: batch.map(toPrismaSatellite),
         skipDuplicates: true,
       });
     }
 
     if (satellitesToUpdate.length > 0) {
-      for (const satellitesBatch of chunk(satellitesToUpdate, UPDATE_BATCH_SIZE)) {
+      for (const satellitesBatch of chunk(
+        satellitesToUpdate,
+        UPDATE_BATCH_SIZE,
+      )) {
         const values = satellitesBatch.map(
           (satellite) =>
-            Prisma.sql`(${satellite.noradId}::integer, ${satellite.displayName}::text, ${satellite.objectId}::text, ${satellite.epoch}::timestamp(3), ${satellite.meanMotion}::double precision, ${satellite.eccentricity}::double precision, ${satellite.inclination}::double precision, ${satellite.raOfAscNode}::double precision, ${satellite.argOfPericenter}::double precision, ${satellite.meanAnomaly}::double precision, ${satellite.bstar}::double precision, ${satellite.meanMotionDot}::double precision, ${satellite.meanMotionDdot}::double precision, ${satellite.tle1}::text, ${satellite.tle2}::text, ${satellite.tleUpdatedAt}::timestamp(3))`,
+            Prisma.sql`(
+              ${satellite.noradId}::integer,
+              ${satellite.displayName}::text,
+              ${satellite.objectId}::text,
+              ${satellite.epoch}::timestamp(3),
+              ${satellite.meanMotion}::double precision,
+              ${satellite.eccentricity}::double precision,
+              ${satellite.inclination}::double precision,
+              ${satellite.raOfAscNode}::double precision,
+              ${satellite.argOfPericenter}::double precision,
+              ${satellite.meanAnomaly}::double precision,
+              ${satellite.bstar}::double precision,
+              ${satellite.meanMotionDot}::double precision,
+              ${satellite.meanMotionDdot}::double precision,
+              ${satellite.tle1}::text,
+              ${satellite.tle2}::text,
+              ${satellite.tleUpdatedAt}::timestamp(3))`,
         );
 
         await prisma.$executeRaw`

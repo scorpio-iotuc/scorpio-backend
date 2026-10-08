@@ -18,6 +18,7 @@ enum UserType {
 }
 
 enum SatelliteUpsertJobStatus {
+  queued
   running
   completed
   failed
@@ -25,12 +26,13 @@ enum SatelliteUpsertJobStatus {
 
 model SatelliteUpsertJob {
   id            String                  @id @default(uuid())
-  status        SatelliteUpsertJobStatus @default(running)
+  status        SatelliteUpsertJobStatus @default(queued)
   started_at    DateTime                 @default(now())
   finished_at   DateTime?
   downloaded    Boolean                 @default(false)
   created       DateTime                 @default(now())
   updated       DateTime                 @updatedAt
+  schedule_key  String?                 @unique
   error_message String?
 
   @@index([created])

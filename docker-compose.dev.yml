@@ -33,6 +33,25 @@ services:
       db:
         condition: service_healthy
 
+  jobs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["worker"]
+    env_file:
+      - dev.env
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-scorpio_dev}?schema=public"
+      UPSERT_SATELLITES_TRIGGER_TIME: "${UPSERT_SATELLITES_TRIGGER_TIME:-00:00}"
+      RUN_ON_START: "${RUN_ON_START:-false}"
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+
 volumes:
   db_data_dev:
 
