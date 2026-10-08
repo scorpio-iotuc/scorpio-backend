@@ -1,11 +1,39 @@
 # Changelog
 
+## [Unreleased] — Catálogo CSV con backpressure y consulta de jobs (2026-10-08)
+
+### Importación CSV
+
+- El worker se organiza en `src/jobs/upsert-satellite/main.ts`, con el cliente CelesTrak en `clients/` y helpers de mapeo y ejecución. Se actualizan los comandos npm y el entrypoint Docker.
+- El cliente solicita `FORMAT=CSV` y consume el cuerpo HTTP mediante streams y `csv-parse`, sin crear un string/array de todo el catálogo. Valida encabezados, filas, números finitos, identificadores y fechas UTC.
+- Cada lote de 100 satélites se persiste secuencialmente. Esperar la escritura aplica backpressure al parser y al stream HTTP, manteniendo buffers acotados. `UpsertSatellites` recibe únicamente un lote y se enfoca en persistirlo; no descarga ni interpreta formatos externos.
+- `downloaded=true` se registra después de consumir y validar todas las filas. Puede quedar pendiente el último lote parcial; el estado `completed` solo se registra después de todas las escrituras. Una interrupción anterior puede dejar lotes persistidos con `downloaded=false`.
+- Se cancela el pipeline ante fallos de red, parsing o escritura. Los lotes confirmados se conservan y una nueva ejecución puede sincronizarlos. El aborto del stream no cancela una consulta SQL ya enviada.
+- El plazo del stream cambia de dos a treinta minutos porque incluye esperas por backpressure. No es un límite de ejecución de consultas PostgreSQL. Se mantiene el calendario diario y el aislamiento del worker.
+- Pruebas nuevas verifican CSV fragmentado/comillas, lotes y backpressure con una escritura bloqueada, errores, aborto, formato solicitado y separación del caso de uso.
+
+
+### Listado y filtros de jobs
+
+- Se incorpora `GET /api/satellites/upsert/jobs`, protegido con Bearer token de administrador, mediante controlador, caso de uso `ListSatelliteUpsertJobs`, DTO y repositorio Prisma.
+- Permite paginar con `page` (por defecto 1) y `limit` (por defecto 20, máximo 100), y filtrar por `status` (`queued`, `running`, `completed`, `failed`) y `downloaded`.
+- `downloaded=true` y `downloaded=false` se convierten explícitamente a booleanos; omitir el parámetro no aplica filtro. Valores inválidos, repetidos o estructurados devuelven **400**. Se corrige así el error TS2345 al pasar directamente `req.query.downloaded` al DTO.
+- Se inicializa el caso de uso en el constructor del controlador. La paginación rechaza números fraccionarios/no finitos y se reutiliza el tipo compartido de estado del job.
+- Los filtros se aplican antes de paginar; se ordena por `created` descendente y luego `id` descendente. La respuesta es un array sin totales: una página fuera del rango devuelve **200** con `[]`.
+- Se corrigen mensajes y comentarios, incluido `noraId` → `noradId`.
+
+### Validación y despliegue
+
+- `npm run build` y las 21 pruebas de `npm test` pasan, incluidas pruebas de streaming, backpressure, filtros booleanos y validación del controlador.
+- Esta validación no incluye una importación real ni una prueba de carga en producción. Reconstruir y recrear `api` y `jobs` para aplicar los cambios de código y la nueva ruta del worker. Esta entrega no agrega migraciones de base de datos.
+
+
 ## [Unreleased] — Worker de satélites y logs (2026-10-07)
 
 ### Cola persistente y servicio Jobs
 
 - Se incorpora el servicio `jobs` en `docker-compose.yml` y `docker-compose.dev.yml`. Usa el mismo Dockerfile que la API, pero ejecuta un proceso independiente; la importación ya no ocupa el event loop de la API.
-- La tarea TypeScript `src/jobs/upsert_satellites_points.ts` reemplaza los scripts Python y el despliegue del directorio raíz `jobs/`. Reutiliza `UpsertSatellites`, los repositorios y Prisma para extraer y guardar datos de CelesTrak.
+- La tarea TypeScript `src/jobs/upsert-satellite/main.ts` reemplaza los scripts Python y el despliegue del directorio raíz `jobs/`. Reutiliza `UpsertSatellites`, los repositorios y Prisma para extraer y guardar datos de CelesTrak.
 - Se agregan las tareas npm `npm run worker` (TypeScript local) y `npm run worker:prod` (JavaScript compilado). En Compose, `command: ["worker"]` selecciona el proceso correspondiente.
 - `POST /api/satellites/upsert` solo registra un job `queued` y responde **202**; devuelve **409** si ya existe un job activo. `GET /api/satellites/upsert` solo consulta el último registro: no modifica jobs ni ejecuta la importación. Ambos mantienen la autorización de administrador.
 - Las migraciones `20261008010000_satellite_job_queue` y `20261008010100_satellite_job_queue_index` incorporan `queued`, una clave diaria única y la restricción de un único job entre `queued` y `running`.
@@ -25,7 +53,7 @@
 
 ### Configuración, ejecución y despliegue del worker
 
-Satellite automation is implemented in `src/jobs/upsert_satellites_points.ts`.
+Satellite automation is implemented in `src/jobs/upsert-satellite/main.ts`.
 The `api` and `jobs` services build the same Dockerfile but start separate processes.
 The root Python `jobs/` deployment and Python API-calling script are retired.
 No automation user/password or separate Python image is required.

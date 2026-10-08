@@ -1,4 +1,4 @@
-import { Satellite } from '../entities/Satellite';
+import { Satellite } from "../entities/Satellite";
 
 export interface ListSatellitesResponseDTO {
   data: Satellite[];
