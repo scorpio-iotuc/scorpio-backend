@@ -3,6 +3,9 @@ import type { SatelliteUpsertJobRepository } from "../../modules/satellites/repo
 import type { UpsertSatellites } from "../../modules/satellites/use-cases/UpsertSatellites";
 import type { CelesTrakClient } from "./clients/CelesTrakClient";
 
+import type NotifyClientInterface from "../notify/NotifyClientInterface";
+import { safeNotify } from "../notify/safe-notify";
+
 const logger = new Logger("SatelliteWorker");
 
 /**
@@ -19,10 +22,16 @@ export async function executeSatelliteJob(
   jobs: SatelliteUpsertJobRepository,
   upsert: Pick<UpsertSatellites, "execute">,
   client: CelesTrakClient,
+  notifications?: NotifyClientInterface,
 ): Promise<void> {
   logger.info("Import started", { jobId });
+  await safeNotify(
+    notifications,
+    "notify",
+    `Satellite job ${jobId}: starting new job; status=running`,
+  );
   try {
-    // Stream active satellites from the CelesTrak client, 
+    // Stream active satellites from the CelesTrak client,
     // saving each batch and marking the job as downloaded when complete.
     await client.streamActiveSatellites(
       (batch) => upsert.execute(batch),
@@ -31,6 +40,11 @@ export async function executeSatelliteJob(
     // Mark the job as completed after all batches have been processed successfully...
     await jobs.complete(jobId);
     logger.info("Import completed", { jobId });
+    await safeNotify(
+      notifications,
+      "notify",
+      `Satellite job ${jobId}: job ended; status=completed`,
+    );
   } catch (error) {
     logger.error("Import failed; committed batches are retained", {
       jobId,
@@ -39,6 +53,12 @@ export async function executeSatelliteJob(
     await jobs.fail(
       jobId,
       "Satellite synchronization failed. Check worker logs.",
+    );
+    const message = error instanceof Error ? error.message : String(error);
+    await safeNotify(
+      notifications,
+      "alert",
+      `Satellite job ${jobId}: job ended; status=failed; message=${message}`,
     );
   }
 }

@@ -79,3 +79,53 @@ test('UTC schedule handles boundary, catch-up, and rejects malformed times', () 
     assert.throws(() => scheduleKey(new Date(), value), /HH:MM/);
   }
 });
+
+
+test('notifies running and completed only after their corresponding transitions', async () => {
+  const { job, jobs, events } = fixture();
+  const notifications = {
+    notify: async (message) => { events.push(message.includes('status=running') ? 'running-notice' : 'completed-notice'); },
+    alert: async () => assert.fail('unexpected alert'),
+  };
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, {
+    streamActiveSatellites: async (_save, downloaded) => downloaded(),
+  }, notifications);
+  assert.deepEqual(events, ['running-notice', 'downloaded', 'completed', 'completed-notice']);
+});
+
+test('alerts with the failure message after persisting failed status', async () => {
+  const { job, jobs } = fixture();
+  const alerts = [];
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, {
+    streamActiveSatellites: async () => { throw new Error('download unavailable'); },
+  }, {
+    notify: async () => {},
+    alert: async (message) => { assert.equal(job.status, 'failed'); alerts.push(message); },
+  });
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0], /job-1.*status=failed.*download unavailable/);
+});
+
+test('notification failures cannot fail a successful import or escape a failed import', async () => {
+  for (const failImport of [false, true]) {
+    const { job, jobs } = fixture();
+    const notifications = {
+      notify: async () => { throw new Error('Discord down'); },
+      alert: async () => { throw new Error('Discord down'); },
+    };
+    await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, {
+      streamActiveSatellites: async () => { if (failImport) throw new Error('Import down'); },
+    }, notifications);
+    assert.equal(job.status, failImport ? 'failed' : 'completed');
+  }
+});
+
+test('long failure messages are truncated for Discord delivery', async () => {
+  const { job, jobs } = fixture();
+  await executeSatelliteJob(job.id, jobs, { execute: async () => {} }, {
+    streamActiveSatellites: async () => { throw new Error('x'.repeat(3000)); },
+  }, {
+    notify: async () => {},
+    alert: async (message) => { assert.equal(message.length, 1900); assert.ok(message.endsWith('...')); },
+  });
+});
