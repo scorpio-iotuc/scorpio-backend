@@ -87,27 +87,3 @@ This that you should consider before starting the stack:
 ```bash
 docker network create scorpio-net
 ```
-
-## Discord notifications
-
-Set `DISCORD_WEBHOOK_URL` in `dev.env` (production: `.env`). The jobs service
-already loads the file through `env_file`. Keep the webhook URL secret.
-If it is absent, the worker runs with notifications disabled.
-
-The worker sends notifications when it creates a startup or scheduled job
-(`status=queued`), starts an import (`status=running`), and successfully finishes
-(`status=completed`). Jobs queued through the API receive their first notification
-when the worker starts them. Failures send an alert with the job ID, `status=failed`,
-and the error message after the failure is saved. Restart recovery sends a summary
-of interrupted jobs marked failed; fatal worker errors also send an alert.
-
-Discord delivery errors are logged separately and never change job status.
-Messages are truncated to fit Discord's limit. Delivery is best effort, with a
-10-second request timeout and no automatic retries. Abrupt process termination
-may prevent delivery; interrupted jobs are reported during restart recovery.
-
-Recreate the development jobs container after updating configuration:
-
-```bash
-docker compose --env-file dev.env -f docker-compose.dev.yml up -d --build jobs
-```
