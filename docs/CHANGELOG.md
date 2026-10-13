@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased] — Notificaciones de jobs por Discord (2026-10-13)
+
+### Notificaciones y alertas
+
+- Se incorpora `NotifyClient` en `src/jobs/notify/`, con una interfaz asíncrona común para `notify` y `alert`. El cliente registrado como `discord-bot` envía mensajes mediante un webhook de Discord.
+- El worker notifica cuando crea un job al iniciar o por calendario (`status=queued`), cuando comienza la importación (`status=running`) y después de guardar su finalización (`status=completed`). Cada mensaje incluye el ID del job. Los jobs encolados desde la API reciben su primera notificación al comenzar la ejecución.
+- Si una importación falla, se envía una alerta con el ID, `status=failed` y el mensaje del error después de persistir el estado. La recuperación tras un reinicio alerta sobre la cantidad de jobs interrumpidos marcados como fallidos; el manejador de errores fatales del worker también envía una alerta.
+- `safeNotify` aísla los errores de entrega para que no alteren el resultado del job y registra el fallo sin incluir la URL secreta del webhook. Recorta los mensajes a 1900 caracteres para reservar espacio al prefijo de alerta. El cliente valida el límite de 2000 caracteres, desactiva menciones y aplica un timeout de 10 segundos, sin reintentos automáticos. La entrega es de mejor esfuerzo y puede perderse ante una terminación abrupta.
+
+### Configuración y despliegue
+
+- Se documenta `DISCORD_WEBHOOK_URL` en `.env.example` y README. Se configura en `dev.env` para desarrollo y en `.env` para producción; si falta o está vacía, el worker continúa con las notificaciones deshabilitadas. No requiere token de bot ni ID de canal separados.
+- La URL debe añadirse también al archivo `/opt/SCORPIO/scorpio-backend/.env` de la VM: los archivos de entorno locales no se suben mediante Git. El despliegue actual reconstruye y levanta el stack completo, incluido `jobs`, que carga la configuración mediante `env_file`. Para aplicar cambios de entorno fuera de un despliegue, recrear el contenedor `jobs`; un simple reinicio no recarga sus variables.
+
+### Pruebas
+
+- Se agregan pruebas del envío por webhook, configuración obligatoria del cliente, límites de longitud y propagación de errores HTTP/red. Las pruebas del worker cubren el orden de las notificaciones, las alertas después de persistir un fallo, el aislamiento de errores de Discord y el recorte de mensajes largos, usando dobles de prueba sin enviar mensajes reales.
+
 ## [Unreleased] — Catálogo CSV con backpressure y consulta de jobs (2026-10-08)
 
 ### Importación CSV

@@ -8,8 +8,15 @@ import { FetchCelesTrakClient } from "./clients/CelesTrakClient";
 import { UpsertSatellites } from "../../modules/satellites/use-cases/UpsertSatellites";
 import { scheduleKey } from "../schedule";
 import { executeSatelliteJob } from "./execute-job";
+import NotifyClient from "../notify/NotifyClient";
+import { safeNotify } from "../notify/safe-notify";
 
+// Clients
 const logger = new Logger("SatelliteWorker");
+const webhookUrl = process.env.DISCORD_WEBHOOK_URL?.trim();
+const notifyClient = webhookUrl
+  ? new NotifyClient("discord-bot", { webhookUrl })
+  : undefined;
 
 const jobs = new PrismaSatelliteUpsertJobRepository();
 const upsert = new UpsertSatellites(new PrismaSatelliteRepository());
@@ -55,7 +62,7 @@ async function main(): Promise<void> {
   if (stopping) return;
 
   // Only an elected worker can recover jobs abandoned by its predecessor.
-  await prisma.satelliteUpsertJob.updateMany({
+  const recovered = await prisma.satelliteUpsertJob.updateMany({
     where: { status: "running" },
     data: {
       status: "failed",
@@ -63,6 +70,13 @@ async function main(): Promise<void> {
       error_message: "Import interrupted by worker restart.",
     },
   });
+  if (recovered.count > 0) {
+    await safeNotify(
+      notifyClient,
+      "alert",
+      `${recovered.count} satellite job(s): status=failed; message=Import interrupted by worker restart.`,
+    );
+  }
   // If the last job was completed more than an hour ago, queue a new job on startup.
   if (process.env.RUN_ON_START === "true") {
     const latest = await jobs.findLatest();
@@ -70,7 +84,13 @@ async function main(): Promise<void> {
       !latest?.finished_at ||
       Date.now() - latest.finished_at.getTime() >= 3600_000
     ) {
-      await jobs.createQueued();
+      const queued = await jobs.createQueued();
+      if (queued)
+        await safeNotify(
+          notifyClient,
+          "notify",
+          `Satellite job ${queued.id}: job queued on startup; status=queued`,
+        );
     }
   }
 
@@ -85,7 +105,14 @@ async function main(): Promise<void> {
       const existing = await prisma.satelliteUpsertJob.findUnique({
         where: { schedule_key: key },
       });
-      if (existing || (await jobs.createQueued(key))) checkedDay = key;
+      const queued = existing ? null : await jobs.createQueued(key);
+      if (existing || queued) checkedDay = key;
+      if (queued)
+        await safeNotify(
+          notifyClient,
+          "notify",
+          `Satellite job ${queued.id}: scheduled job queued; status=queued`,
+        );
     }
     // Check for a queued job and claim it for processing.
     const job = await prisma.$transaction(async (tx) => {
@@ -119,6 +146,7 @@ async function main(): Promise<void> {
         jobs,
         upsert,
         new FetchCelesTrakClient(),
+        notifyClient,
       );
     } finally {
       // Regardless of success or failure, mark the job as no longer active.
@@ -128,8 +156,13 @@ async function main(): Promise<void> {
 }
 
 main()
-  .catch((error) => {
+  .catch(async (error) => {
     logger.error("Fatal error", error);
+    await safeNotify(
+      notifyClient,
+      "alert",
+      "Satellite worker stopped after a fatal error. Check worker logs.",
+    );
     process.exitCode = 1;
   })
   .finally(async () => {
