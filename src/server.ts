@@ -11,6 +11,7 @@ import { buildStationRoutes } from './routes/stations.routes';
 import { buildSatellitesRoutes } from './routes/satellites.routes';
 import { buildPacketRoutes } from './routes/packets.routes';
 import { buildStatsRoutes } from './routes/stats.routes';
+import { buildPassesRoutes } from './routes/passes.routes';
 import buildAuthRoutes from './routes/auth.routes';
 
 const logger = new Logger('API');
@@ -62,6 +63,7 @@ api.get('/health', health);
 api.use('/users', buildUserRoutes());
 api.use('/satellites', buildSatellitesRoutes());
 api.use('/stations', buildStationRoutes());
+api.use('/passes', buildPassesRoutes());
 api.use('/packets', buildPacketRoutes());
 api.use('/stats', buildStatsRoutes());
 api.use('/auth', authLimiter, buildAuthRoutes());

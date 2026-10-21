@@ -6,6 +6,7 @@ import { Satellite } from "../entities/Satellite";
 import { PrismaSatelliteRepository } from "./PrismaSatelliteRepository";
 
 export interface SatelliteRepository {
+  findByNoradId(noradId: number): Promise<Satellite | null>;
   findAll(query: ListSatellitesDTO): Promise<ListSatellitesResponseDTO>;
   upsertMany(
     satellites: UpsertSatelliteDTO[],

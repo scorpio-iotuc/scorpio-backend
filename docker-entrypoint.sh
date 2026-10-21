@@ -2,7 +2,7 @@
 set -e
 
 if [ "${1:-}" = "worker" ]; then
-  exec node dist/jobs/upsert-satellite/main.js
+  exec node dist/jobs/main.js
 fi
 
 npx prisma migrate deploy

@@ -1,5 +1,54 @@
 # Changelog
 
+## [Unreleased] — Paginación de pasadas (2026-10-21)
+
+- `GET /api/passes` acepta `page` (por defecto 1) y `limit` (por defecto 20, máximo 100). El controlador rechaza valores vacíos, repetidos, no enteros, fuera de rango y offsets mayores que el máximo entero de 32 bits.
+- La paginación se aplica en PostgreSQL después de filtrar las pasadas y ordenarlas globalmente por AOS, NORAD e ID; no limita los satélites usados por el job. El conteo y la página comparten una transacción `RepeatableRead`.
+- La respuesta mantiene `stationUuid`, `windowHours` y `passes`, y agrega `pagination: { page, limit, total, totalPages }`. Sin coincidencias devuelve total y totalPages en cero. Una página fuera del rango devuelve `passes: []` con los totales correspondientes.
+- La trayectoria conserva `GET /api/passes/:passId/trajectory?stepSeconds=10`, usando el `passId` recibido en el listado. No requiere migración. Cada solicitud del listado evalúa la ventana desde su hora actual; páginas solicitadas en momentos distintos pueden reflejar el avance del tiempo o una generación recién publicada.
+
+## [Unreleased] — Logs de pasadas y transiciones de jobs (2026-10-21)
+
+- `CreatePasses` registra el inicio por estación y el progreso tras cada lote de satélites: job, estación, generación, cursor, cantidad procesada, pasadas generadas, omisiones y tiempos por lote/acumulado. Los contadores se registran después de esperar las escrituras, sin emitir una línea por satélite.
+- `PassesAPI` registra solicitudes `ListPasses` y `GetPassTrajectory` con ID de correlación, identificadores/parámetros escalares acotados, estado HTTP y duración. Incluye rechazos de validación y errores inesperados; no registra headers, cuerpos ni los arrays de pasadas/puntos.
+- El worker registra encolado, reclamación, recuperación tras reinicio y adquisición/espera del lock. Para cada tipo de job, registra la cabecera de cola esperando otro job solo cuando cambia el job pendiente o el bloqueo; no repite el mensaje en cada poll.
+- La limpieza de pasadas registra inicio y fin, fase, fecha de corte, filas eliminadas y duración. La finalización del job incluye el total eliminado en ambas limpiezas y el tiempo total.
+- Los logs usan el `Logger` existente y salen por stdout/stderr: `docker compose logs -f jobs` para predicciones/cola y `docker compose logs -f api` para solicitudes. Las notificaciones de Discord conservan su comportamiento.
+
+## [Unreleased] — Pasadas persistidas por estación y worker compartido (2026-10-21)
+
+### Predicción y almacenamiento
+
+- Se agrega `SatellitePass`, con UUID persistido, relaciones a estación y satélite, AOS, LOS, elevación máxima y su instante, nombre/NORAD de la predicción, fecha de creación y snapshot de los elementos orbitales. `satellite_id` es la clave interna; `satelliteId` en la respuesta pública sigue siendo el número NORAD.
+- `StationPassJob` guarda estado, clave diaria única, ventana (`window_start`, `window_end`, `window_hours`), tiempos, contadores y errores. `StationPassGeneration` guarda las coordenadas usadas para cada estación, incluso si no se encuentran pasadas. Los snapshots permiten reproducir la trayectoria aunque cambie el catálogo o la estación.
+- Los lotes se guardan como resultados pendientes. Solo el cambio del job a `completed` publica todas sus generaciones; un fallo conserva las últimas predicciones publicadas y elimina los resultados parciales. Las generaciones anteriores siguen disponibles por ID hasta que sus pasadas expiran.
+- Cada ejecución elimina registros de `SatellitePass` con `los < ahora`, al iniciar y antes de publicar. Conserva las pasadas en curso y futuras; una pasada eliminada ya no tiene trayectoria consultable. Los metadatos de jobs y generaciones se mantienen como historial.
+
+### Create Station Passes
+
+- Se incorpora `src/jobs/create-station-passes/execute-job.ts`, programado todos los días a las **12:00 UTC**. El worker compartido `src/jobs/main.ts` coordina esta tarea y la importación de satélites con el mismo lock de sesión PostgreSQL. Solo reclama un job cuando ninguno de los dos tipos está ejecutándose; los demás permanecen `queued`.
+- El scheduler sigue revisando el calendario mientras se ejecuta un job. Las claves diarias evitan duplicados; tras un reinicio se marcan como fallidas las ejecuciones interrumpidas y se descartan sus resultados pendientes. Si el proceso inicia después de las 12:00 UTC, encola la ejecución del día si falta. `RUN_ON_START` conserva su efecto anterior sobre la importación de satélites.
+- Se reutilizan las notificaciones de Discord para `queued`, `running`, `completed`, `failed` y recuperación de ejecuciones interrumpidas. Los fallos de entrega no cambian el estado del job.
+- `CreatePasses` calcula para todas las estaciones y satélites. Las estaciones se leen en páginas de 100 y los satélites mediante `findAll({ afterId, limit: 100 })`, con cursor por ID para evitar desplazamientos de página por nuevas inserciones. Se elimina `findAllForPassPrediction`. La paginación HTTP existente del catálogo conserva `page` y `limit`.
+- Se espera cada predicción/escritura antes de continuar: la memoria queda acotada al lote y a las pasadas de un satélite. El recorrido no acumula todo el catálogo ni todas las predicciones. El cálculo sigue siendo costoso para 80k satélites y múltiples estaciones: no se ha validado ese volumen en producción.
+- La ventana comienza al reclamar el job, no al encolarlo. `STATION_PASSES_WINDOW_HOURS` vale **72** por defecto (entero entre 48 y 240), dando margen al refresco diario y a la vista de próximas 24 horas. Un job que termina sin cobertura para las próximas 24 horas falla en vez de publicar resultados insuficientes.
+- Los helpers `orbit.ts`, `predict.ts` y `scan.ts` quedan separados en `src/modules/passes/helpers/`, conservando los comentarios del cálculo. Se calculan pasadas desde el horizonte, sin aplicar el filtro del usuario durante la generación. Se omiten elementos orbitales inválidos, contabilizándolos por par satélite/estación; errores inesperados abortan el job.
+
+### API de pasadas y trayectoria
+
+- `GET /api/passes?stationUuid=<uuid>&hours=24&minElevation=10&noradid=28492` consulta únicamente la última generación completada de esa estación, sin propagar órbitas ni paginar la respuesta. Omitir `noradid` consulta todas las pasadas. `satelliteNoradId` sigue disponible como alias; no se permiten ambos a la vez.
+- La validación de parámetros permanece en el controlador: estación obligatoria, `hours` mayor que 0 y hasta 168, `minElevation` entre 0 y 90, NORAD entero positivo de 32 bits. La consulta filtra AOS en `[ahora, ahora + hours)`, elevación máxima y NORAD, y ordena globalmente por AOS. Las pasadas ya iniciadas no aparecen en este listado de próximas pasadas.
+- Si no existe generación publicada, cambiaron las coordenadas o la ventana solicitada excede la cobertura disponible, responde **503** con un mensaje explícito. No devuelve una lista vacía como si hubiera cobertura completa. Una estación o satélite explícito inexistente devuelve **404**.
+- Se agrega `GET /api/passes/:passId/trajectory?stepSeconds=10`, y el alias `GET /api/passes/trajectory?passId=<uuid>&stationUuid=<uuid>&stepSeconds=10`. `passId` identifica la pasada; `stationUuid` es una comprobación opcional. El controlador acepta pasos enteros entre 1 y 300 segundos. Se usan los snapshots, se incluyen AOS y LOS exactos y se limita la respuesta a 10000 puntos (**422** si requiere un paso mayor). Un ID inexistente, pendiente o eliminado devuelve **404**.
+- El escaneo mantiene pasos de 10 segundos y refinamiento de cruces/pico a intervalos de 100 ms. Puede omitir pasadas rasantes más cortas que el paso; esa tolerancia numérica no garantiza precisión física. La altitud de estación se interpreta en metros. No se corrigen refracción ni obstrucciones del terreno y la calidad depende de la vigencia de los elementos orbitales.
+
+### Migración y ejecución
+
+- La migración `20261021190000_station_pass_predictions` crea las tres tablas, índices y claves foráneas; no modifica ni borra los datos existentes. Aplicar con `npx prisma migrate deploy` y regenerar el cliente con `npx prisma generate` antes de ejecutar el nuevo código. El entrypoint de la API ya aplica migraciones y Compose espera su healthcheck antes de iniciar `jobs`.
+- `npm run worker` y `npm run worker:prod` ejecutan el coordinador compartido. Se mantienen los entrypoints de compatibilidad de ambos tipos de job; cualquier réplica usa el mismo lock. Se documenta `STATION_PASSES_WINDOW_HOURS` en `.env.example` y en ambos Compose. No se requieren dos servicios worker.
+- Verificación: `npm run build`, las 47 pruebas unitarias y la prueba de integración PostgreSQL pasan. Se aplicaron todas las migraciones en una base desechable, verificando exclusión de jobs, publicación, filtros, snapshots, claves foráneas y limpieza; no se migró la base de la aplicación.
+- Se reemplaza `docs/passes.md` por esta entrada. Pruebas unitarias cubren filtros, cursor/backpressure, horario UTC, exclusión de jobs, publicación, fallos, notificaciones y trayectorias. La prueba PostgreSQL optativa se ejecuta con `PASSES_TEST_DATABASE_URL=<base-desechable-migrada> npm run test:passes:integration`; no debe apuntar a la base de la aplicación.
+
 ## [Unreleased] — Notificaciones de jobs por Discord (2026-10-13)
 
 ### Notificaciones y alertas

@@ -70,6 +70,7 @@ model Satellite {
   updated_at        DateTime  @updatedAt
 
   packets Packet[] @relation("SatellitePackets")
+  passes SatellitePass[]
 }
 
 model Station {
@@ -88,6 +89,8 @@ model Station {
 
   owner   User     @relation("OwnedStations", fields: [owner_id], references: [id])
   packets Packet[] @relation("StationPackets")
+  passGenerations StationPassGeneration[]
+  passes SatellitePass[]
 }
 
 model Packet {
@@ -108,4 +111,65 @@ model Packet {
 
   station   Station   @relation("StationPackets", fields: [station_id], references: [id])
   satellite Satellite @relation("SatellitePackets", fields: [satellite_id], references: [id])
+}
+
+// One generation is published only when every station and satellite batch finishes.
+model StationPassJob {
+  id             String                  @id @default(uuid())
+  status         SatelliteUpsertJobStatus @default(queued)
+  schedule_key   String?                 @unique
+  window_hours   Int                     @default(72)
+  window_start   DateTime?
+  window_end     DateTime?
+  started_at     DateTime?
+  finished_at    DateTime?
+  created_at     DateTime                @default(now())
+  updated_at     DateTime                @updatedAt
+  error_message  String?
+  generated      Int                     @default(0)
+  skipped        Int                     @default(0)
+  generations    StationPassGeneration[]
+
+  @@index([status, created_at])
+}
+
+// Also records successful station predictions with zero qualifying passes.
+model StationPassGeneration {
+  id           String         @id @default(uuid())
+  job_id       String
+  station_uuid String
+  latitude     Float
+  longitude    Float
+  altitude     Float
+  created_at   DateTime       @default(now())
+  job          StationPassJob @relation(fields: [job_id], references: [id], onDelete: Cascade)
+  station      Station        @relation(fields: [station_uuid], references: [uuid], onDelete: Cascade)
+  passes       SatellitePass[]
+
+  @@unique([job_id, station_uuid])
+  @@unique([id, station_uuid])
+  @@index([station_uuid, created_at])
+}
+
+model SatellitePass {
+  id               String                @id @default(uuid())
+  generation_id    String
+  station_uuid     String
+  satellite_id     Int
+  satellite_name   String
+  satellite_norad_id Int
+  aos              DateTime
+  los              DateTime
+  max_elevation    Float
+  max_elevation_at DateTime
+  orbital_snapshot Json
+  created_at       DateTime              @default(now())
+  generation       StationPassGeneration @relation(fields: [generation_id, station_uuid], references: [id, station_uuid], onDelete: Cascade)
+  station          Station               @relation(fields: [station_uuid], references: [uuid], onDelete: Cascade)
+  satellite        Satellite             @relation(fields: [satellite_id], references: [id], onDelete: Cascade)
+
+  @@unique([generation_id, satellite_id, aos])
+  @@index([generation_id, station_uuid, aos])
+  @@index([satellite_id])
+  @@index([los])
 }

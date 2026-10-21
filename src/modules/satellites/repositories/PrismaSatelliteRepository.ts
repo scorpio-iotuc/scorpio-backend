@@ -64,10 +64,15 @@ const toPrismaSatellite = (satellite: UpsertSatelliteDTO) => ({
 });
 
 export class PrismaSatelliteRepository implements SatelliteRepository {
+  async findByNoradId(noradId: number): Promise<Satellite | null> {
+    const satellite = await prisma.satellite.findUnique({ where: { norad_id: noradId } });
+    return satellite ? toDomainSatellite(satellite) : null;
+  }
+
   async findAll(query: ListSatellitesDTO): Promise<ListSatellitesResponseDTO> {
     const limit = query.limit ?? 20;
     const page = query.page ?? 1;
-    const skip = (page - 1) * limit;
+    const skip = query.afterId === undefined ? (page - 1) * limit : 0;
     const displayName = query.displayName ?? undefined;
     const noradId = query.noradId ?? undefined;
 
@@ -79,10 +84,11 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
             mode: "insensitive",
           },
           norad_id: noradId,
+          id: query.afterId === undefined ? undefined : { gt: query.afterId },
         },
       }),
       prisma.satellite.findMany({
-        orderBy: { display_name: "asc" },
+        orderBy: query.afterId === undefined ? [{ display_name: "asc" }, { id: "asc" }] : { id: "asc" },
         skip,
         take: limit,
         where: {
@@ -91,6 +97,7 @@ export class PrismaSatelliteRepository implements SatelliteRepository {
             mode: "insensitive",
           },
           norad_id: noradId,
+          id: query.afterId === undefined ? undefined : { gt: query.afterId },
         },
       }),
     ]);
