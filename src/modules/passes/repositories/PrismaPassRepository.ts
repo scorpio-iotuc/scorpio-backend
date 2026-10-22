@@ -113,6 +113,10 @@ export class PrismaPassRepository implements PassRepository {
       aos: { gte: query.start, lt: query.end },
       max_elevation: { gte: query.minElevation },
       satellite_norad_id: query.satelliteNoradId,
+      satellite_name: {
+        contains: query.satelliteDisplayName,
+        mode: "insensitive",
+      }
     };
     // Count and page share one snapshot. Filter and globally sort passes before pagination.
     const [total, rows] = await prisma.$transaction(

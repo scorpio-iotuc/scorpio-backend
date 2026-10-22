@@ -40,6 +40,7 @@ export interface PassRepository {
     start: Date;
     end: Date;
     minElevation: number;
+    satelliteDisplayName?: string;
     satelliteNoradId?: number;
   }): Promise<Pick<ListPassesResponseDTO, "passes" | "pagination">>;
   findById(id: string): Promise<StoredPass | null>;

@@ -7,6 +7,7 @@ export interface ListPassesDTO {
   hours?: number;
   minElevation?: number;
   satelliteNoradId?: number;
+  satelliteDisplayName?: string;
 }
 
 export interface ListPassesResponseDTO {

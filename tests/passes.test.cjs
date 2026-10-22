@@ -135,6 +135,7 @@ test("controller preserves defaults and NORAD alias and serializes the persisted
         hours: 24,
         minElevation: 10,
         satelliteNoradId: 28492,
+        satelliteDisplayName: undefined,
         page: 1,
         limit: 20,
       });
@@ -147,6 +148,55 @@ test("controller preserves defaults and NORAD alias and serializes the persisted
     );
     assert.equal(res.code, 200);
     assert.equal(res.body, result);
+  }
+});
+
+test("controller rejects invalid satelliteDisplayName before calling the use case", async () => {
+  for (const satelliteDisplayName of [
+    "", "   ", "\t\n", ["HELIOS"], ["HELIOS", "ISS"],
+    { contains: "HELIOS" }, null, 28492,
+  ]) {
+    const { controller, calls } = fixture();
+    controller.listPasses.execute = async () => {
+      assert.fail("Invalid satelliteDisplayName reached use case");
+    };
+    const res = response();
+    await controller.list(
+      { query: { stationUuid: station.uuid, satelliteDisplayName } },
+      res,
+    );
+    assert.equal(res.code, 400, JSON.stringify(satelliteDisplayName));
+    assert.equal(res.body.message, "satelliteDisplayName must be a non-empty string");
+    assert.equal(calls.length, 0);
+  }
+});
+
+test("controller and use case forward satelliteDisplayName with pagination and optional NORAD", async () => {
+  for (const satelliteDisplayName of ["HELIOS 2A", "eLiOs"]) {
+    for (const noradid of [undefined, "28492"]) {
+      const { controller, usecase, calls } = fixture();
+      controller.listPasses = usecase;
+      const res = response();
+      await controller.list({ query: {
+        stationUuid: station.uuid, satelliteDisplayName, noradid,
+        hours: "12", minElevation: "25", page: "2", limit: "5",
+      } }, res);
+      assert.equal(res.code, 200);
+      assert.deepEqual(calls.at(-1), ["passes", {
+        stationUuid: station.uuid,
+        generationId: "generation",
+        satelliteDisplayName,
+        satelliteNoradId: noradid === undefined ? undefined : 28492,
+        start,
+        end: new Date(start.getTime() + 12 * 3600_000),
+        minElevation: 25,
+        page: 2,
+        limit: 5,
+      }]);
+      assert.equal(calls.filter(call => call[0] === "satellite").length,
+        noradid === undefined ? 0 : 1);
+      assert.deepEqual(res.body.pagination, { page: 2, limit: 5, total: 0, totalPages: 0 });
+    }
   }
 });
 
@@ -169,6 +219,7 @@ test("ListPasses reads persisted predictions with all filters, without loading t
     hours: 12,
     minElevation: 25,
     satelliteNoradId: 28492,
+    satelliteDisplayName: "helios",
   });
   assert.deepEqual(result, {
     stationUuid: station.uuid,
@@ -187,6 +238,7 @@ test("ListPasses reads persisted predictions with all filters, without loading t
       end: new Date(start.getTime() + 12 * 3600_000),
       minElevation: 25,
       satelliteNoradId: 28492,
+      satelliteDisplayName: "helios",
     },
   ]);
 });
@@ -522,9 +574,10 @@ test("controller and use case forward page/limit and return pagination metadata"
   });
   assert.equal(calls.at(-1)[1].page, 3);
   assert.equal(calls.at(-1)[1].limit, 5);
+  assert.equal(calls.at(-1)[1].satelliteDisplayName, undefined);
 });
 
-test("repository counts matching passes and paginates after a stable global AOS order", async (t) => {
+test("repository applies optional case-insensitive name filtering to count and page before global AOS pagination", async (t) => {
   const prismaModule = require("../src/lib/prisma");
   const original = prismaModule.prisma;
   const {
@@ -560,27 +613,30 @@ test("repository counts matching passes and paginates after a stable global AOS 
     page: 5,
     limit: 10,
   };
-  const result = await new PrismaPassRepository().findAll(query);
-  assert.deepEqual(result, {
-    passes: [],
-    pagination: { page: 5, limit: 10, total: 35, totalPages: 4 },
-  });
-  assert.deepEqual(rowsQuery.where, countQuery.where);
-  assert.deepEqual(rowsQuery.where, {
-    generation_id: "g",
-    station_uuid: station.uuid,
-    generation: { job: { status: "completed" } },
-    aos: { gte: start, lt: end },
-    max_elevation: { gte: 20 },
-    satellite_norad_id: 28492,
-  });
-  assert.deepEqual(rowsQuery.orderBy, [
-    { aos: "asc" },
-    { satellite_norad_id: "asc" },
-    { id: "asc" },
-  ]);
-  assert.equal(rowsQuery.skip, 40);
-  assert.equal(rowsQuery.take, 10);
+  for (const satelliteDisplayName of [undefined, "eLiOs"]) {
+    const result = await new PrismaPassRepository().findAll({ ...query, satelliteDisplayName });
+    assert.deepEqual(result, {
+      passes: [],
+      pagination: { page: 5, limit: 10, total: 35, totalPages: 4 },
+    });
+    assert.deepEqual(rowsQuery.where, countQuery.where);
+    assert.deepEqual(rowsQuery.where, {
+      generation_id: "g",
+      station_uuid: station.uuid,
+      generation: { job: { status: "completed" } },
+      aos: { gte: start, lt: end },
+      max_elevation: { gte: 20 },
+      satellite_norad_id: 28492,
+      satellite_name: { contains: satelliteDisplayName, mode: "insensitive" },
+    });
+    assert.deepEqual(rowsQuery.orderBy, [
+      { aos: "asc" },
+      { satellite_norad_id: "asc" },
+      { id: "asc" },
+    ]);
+    assert.equal(rowsQuery.skip, 40);
+    assert.equal(rowsQuery.take, 10);
+  }
 });
 
 test("bulk repository combines satellites into bounded writes and awaits database backpressure", async (t) => {

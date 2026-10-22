@@ -152,10 +152,32 @@ test(
         minElevation: 0,
       });
       assert.ok(listed.passes.length > 0);
+      for (const satelliteDisplayName of ["HELIOS 2A", "eLiOs"]) {
+        const byName = await listing.execute({
+          stationUuid: token,
+          minElevation: 0,
+          satelliteDisplayName,
+          limit: 1,
+        });
+        assert.deepEqual(byName.passes, listed.passes.slice(0, 1));
+        assert.equal(byName.pagination.total, listed.pagination.total);
+        assert.equal(byName.pagination.totalPages, listed.pagination.total);
+      }
+      const noNameMatch = await listing.execute({
+        stationUuid: token,
+        satelliteDisplayName: "NONEXISTENT-SATELLITE",
+        satelliteNoradId: 28492,
+        minElevation: 0,
+      });
+      assert.deepEqual(noNameMatch.passes, []);
+      assert.deepEqual(noNameMatch.pagination, {
+        page: 1, limit: 20, total: 0, totalPages: 0,
+      });
       const filtered = await listing.execute({
         stationUuid: token,
         minElevation: 40,
         satelliteNoradId: 28492,
+        satelliteDisplayName: "helios",
       });
       assert.deepEqual(
         filtered.passes,

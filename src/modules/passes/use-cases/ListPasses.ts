@@ -57,6 +57,7 @@ export class ListPasses {
         start,
         end,
         minElevation: query.minElevation ?? 10,
+        satelliteDisplayName: query.satelliteDisplayName,
         satelliteNoradId: query.satelliteNoradId,
       })),
     };

@@ -118,6 +118,7 @@ export class PassController {
     const satelliteNoradId = number(
       req.query.noradid ?? req.query.satelliteNoradId,
     );
+    const satelliteDisplayName = req.query.satelliteDisplayName;
 
     if (typeof stationUuid !== "string" || !stationUuid.trim()) {
       return res.status(400).json({ message: "stationUuid is required" });
@@ -161,6 +162,15 @@ export class PassController {
         .status(400)
         .json({ message: "noradid must be a positive 32-bit integer" });
     }
+    if (
+      satelliteDisplayName !== undefined &&
+      (typeof satelliteDisplayName !== "string" ||
+        !satelliteDisplayName.trim())
+    ) {
+      return res
+        .status(400)
+        .json({ message: "satelliteDisplayName must be a non-empty string" });
+    }
 
     try {
       const result = await this.listPasses.execute({
@@ -169,6 +179,7 @@ export class PassController {
         limit,
         hours,
         minElevation,
+        satelliteDisplayName,
         satelliteNoradId,
       });
       if (!result)
