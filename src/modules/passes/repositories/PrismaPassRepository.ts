@@ -133,7 +133,7 @@ export class PrismaPassRepository implements PassRepository {
           take: query.limit,
         }),
       ],
-      { isolationLevel: "RepeatableRead" },
+      { isolationLevel: "RepeatableRead", timeout: 15_000 },
     );
     return {
       passes: rows.map(toPass),
