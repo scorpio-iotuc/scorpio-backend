@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased] — Cola de jobs extensible (2026-10-22)
+
+- Se define `JobInterface` para programación, inicio opcional, recuperación, consulta de pendientes/ejecuciones activas, reclamación y ejecución. `SatelliteUpsertJob` y `CreateStationPassesJob` encapsulan sus modelos Prisma, configuración y reglas específicas.
+- `JobQueue` recorre los jobs registrados sin conocer sus tablas ni distinguir tipos concretos. Reclama el pendiente más antiguo; en caso de empate, usa el orden de registro. Si cualquier job registrado está ejecutándose, los demás permanecen `queued`.
+- `registry.ts` centraliza la composición de dependencias. `main.ts` ejecuta el contrato común, conservando el lock PostgreSQL entre réplicas, la programación durante una ejecución, los logs de espera y las notificaciones. Un nuevo tipo se implementa y registra sin modificar la cola ni el coordinador.
+- Se conservan los horarios UTC, `RUN_ON_START`, la ventana de predicción calculada al reclamar, la recuperación transaccional y la limpieza de generaciones fallidas. La ejecución se inicia después de confirmar la transacción de reclamación. No requiere migraciones.
+- Las pruebas cubren un tercer tipo de job, exclusión, orden y desempates, ejecución fuera de transacción, errores, recuperación, inicio opcional y despacho de los jobs existentes.
+
+## [Unreleased] — Uso directo de ThreadClient en CreatePasses (2026-10-22)
+
+- `CreatePasses` instancia directamente `ThreadClient` y conserva la inyección mediante `ThreadClientContract`. Se elimina la factory `createPredictionPool` y el directorio `passes/workers`.
+- `ThreadClient` centraliza los defaults (4 threads, cola de 100, heap de 128 MB) y la resolución TS/JS con carga automática de ts-node solo para workers TypeScript. Los consumidores indican proveedor y ruta del worker; pueden sobrescribir los límites.
+- El entrypoint de predicción pasa a `helpers/predictWorker.ts` y los tipos de tarea/resultado a `dto/PredictionDTO.ts`. La implementación Piscina sigue encapsulada en el cliente de infraestructura.
+
+## [Unreleased] — Adaptador genérico de threads (2026-10-22)
+
+- Se extrae Piscina a `src/lib/thread-client/`, siguiendo la separación de fachada, contrato, tipos y clientes. `ThreadClient.ts` selecciona el proveedor, `ThreadClientContract.ts` define `run`/`destroy`, `types/ThreadClientTypes.ts` define configuración independiente de Piscina y `main.ts` expone la API pública.
+- `clients/PiscinaClient.ts` encapsula la dependencia, traduce las opciones y administra el pool. Las tareas y resultados son genéricos y serializables entre threads. Para incorporar otro proveedor se implementa el contrato y se registra su constructor en la fachada; no cambia `CreatePasses`.
+- El módulo de pasadas conserva el worker y una factory `createPredictionPool` con la ruta TS/JS, cuatro threads, cola de 100 y heap de 128 MB por worker. Se elimina `PiscinaPredictionPool`; `PredictionPool` pasa a ser un alias del contrato genérico.
+- `destroy` es idempotente, comparte la promesa de cierre y rechaza nuevas tareas una vez cerrado. Se prueban tareas genéricas, errores, datos estructurados, cierre, validación y la predicción real mediante el adaptador.
+
+## [Unreleased] — Predicción por lotes con Piscina (2026-10-22)
+
+- El job obtiene cada lote de 100 satélites una sola vez mediante el cursor de `findAll`, y lo reutiliza para todas las estaciones antes de obtener el siguiente lote. Las estaciones se leen una vez por job en páginas de 100 y se mantienen sus snapshots/generaciones en memoria; no se acumula el catálogo completo ni el producto de estaciones y satélites.
+- `CreatePasses` recibe el lote y la generación de una estación. Un único pool Piscina de cuatro threads por job se reutiliza entre estaciones/lotes; cada tarea calcula un satélite y no accede a Prisma. Se conserva el filtrado de órbitas inválidas y el cálculo desde el horizonte. El coordinador espera todos los resultados, incluso si falla una tarea, antes de propagar un error.
+- `createBatch` combina las predicciones de varios satélites en escrituras Prisma de hasta 500 filas y espera cada escritura. Solo después de persistir todas las predicciones de la estación se avanza a la siguiente; después de la última estación se obtiene el próximo lote. La publicación atómica, limpieza, notificaciones y exclusión entre jobs se conservan.
+- Se agrega Piscina 5 (compatible con Node 22), workers TypeScript para ejecución local y JavaScript compilado para Docker, sin necesitar ts-node en producción. El pool limita la cola a 100 tareas y el heap antiguo de cada thread a 128 MB; se libera al terminar o fallar el job. Estos límites no equivalen a una medición de RSS total.
+- El servicio `jobs` de `docker-compose.dev.yml` queda limitado a 4 CPUs y 1 GB de memoria. Aplicar con `docker compose --env-file dev.env -f docker-compose.dev.yml up -d --build jobs`. No cambia el calendario ni requiere migraciones.
+- Pruebas cubren orden lote→estación, una lectura de cada lote, backpressure de predicciones y escrituras, fallo sin persistencia parcial, liberación del pool y equivalencia numérica entre predicción serial y cuatro threads reales. No se realizó una prueba de carga con 80k satélites.
+
 ## [Unreleased] — Paginación de pasadas (2026-10-21)
 
 - `GET /api/passes` acepta `page` (por defecto 1) y `limit` (por defecto 20, máximo 100). El controlador rechaza valores vacíos, repetidos, no enteros, fuera de rango y offsets mayores que el máximo entero de 32 bits.

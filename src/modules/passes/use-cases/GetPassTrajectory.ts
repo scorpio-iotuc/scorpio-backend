@@ -13,7 +13,7 @@ import { InvalidOrbitError } from "../errors/InvalidOrbitError";
 import { PassesInputError } from "../errors/PassesInputError";
 
 export class GetPassTrajectory {
-  constructor(private readonly passes: PassRepository) { }
+  constructor(private readonly passes: PassRepository) {}
 
   async execute(passId: string, stepSeconds: number, stationUuid?: string) {
     const stored = await this.passes.findById(passId);

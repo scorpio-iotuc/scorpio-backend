@@ -35,15 +35,32 @@ export class PrismaPassRepository implements PassRepository {
     satellite: Satellite,
     passes: Pass[],
   ): Promise<number> {
-    if (!passes.length) return 0;
-    // Snapshot the actual orbital input: later CSV imports must not change this pass's trajectory.
-    const snapshot = JSON.parse(
-      JSON.stringify(satellite),
-    ) as Prisma.InputJsonObject;
+    return this.createBatch(generationId, stationUuid, [{ satellite, passes }]);
+  }
+
+  async createBatch(
+    generationId: string,
+    stationUuid: string,
+    predictions: { satellite: Satellite; passes: Pass[] }[],
+  ): Promise<number> {
     let count = 0;
-    for (let offset = 0; offset < passes.length; offset += 500) {
+    let rows: Prisma.SatellitePassCreateManyInput[] = [];
+    const flush = async () => {
+      if (!rows.length) return;
       const result = await prisma.satellitePass.createMany({
-        data: passes.slice(offset, offset + 500).map((pass) => ({
+        data: rows,
+        skipDuplicates: true,
+      });
+      count += result.count;
+      rows = [];
+    };
+    for (const { satellite, passes } of predictions) {
+      // Snapshot the actual orbital input: later CSV imports must not change this pass's trajectory.
+      const snapshot = JSON.parse(
+        JSON.stringify(satellite),
+      ) as Prisma.InputJsonObject;
+      for (const pass of passes) {
+        rows.push({
           generation_id: generationId,
           station_uuid: stationUuid,
           satellite_id: satellite.id,
@@ -54,11 +71,11 @@ export class PrismaPassRepository implements PassRepository {
           max_elevation: pass.maxElevation,
           max_elevation_at: pass.maxElevationAt,
           orbital_snapshot: snapshot,
-        })),
-        skipDuplicates: true,
-      });
-      count += result.count;
+        });
+        if (rows.length === 500) await flush();
+      }
     }
+    await flush();
     return count;
   }
 
@@ -98,18 +115,30 @@ export class PrismaPassRepository implements PassRepository {
       satellite_norad_id: query.satelliteNoradId,
     };
     // Count and page share one snapshot. Filter and globally sort passes before pagination.
-    const [total, rows] = await prisma.$transaction([
-      prisma.satellitePass.count({ where }),
-      prisma.satellitePass.findMany({
-        where,
-        orderBy: [{ aos: "asc" }, { satellite_norad_id: "asc" }, { id: "asc" }],
-        skip: (query.page - 1) * query.limit,
-        take: query.limit,
-      }),
-    ], { isolationLevel: "RepeatableRead" });
+    const [total, rows] = await prisma.$transaction(
+      [
+        prisma.satellitePass.count({ where }),
+        prisma.satellitePass.findMany({
+          where,
+          orderBy: [
+            { aos: "asc" },
+            { satellite_norad_id: "asc" },
+            { id: "asc" },
+          ],
+          skip: (query.page - 1) * query.limit,
+          take: query.limit,
+        }),
+      ],
+      { isolationLevel: "RepeatableRead" },
+    );
     return {
       passes: rows.map(toPass),
-      pagination: { page: query.page, limit: query.limit, total, totalPages: Math.ceil(total / query.limit) },
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.ceil(total / query.limit),
+      },
     };
   }
 

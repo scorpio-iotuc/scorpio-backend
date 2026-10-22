@@ -10,6 +10,7 @@ test('PostgreSQL: job exclusion, staged publication, snapshots, filtering and ex
   process.env.DATABASE_URL=databaseUrl;
   const {prisma}=require('../../src/lib/prisma');
   const {JobQueue}=require('../../src/jobs/queue');
+  const {createJobRegistry}=require('../../src/jobs/registry');
   const {PrismaPassRepository}=require('../../src/modules/passes/repositories/PrismaPassRepository');
   const {PrismaStationPassJobRepository}=require('../../src/modules/passes/repositories/PrismaStationPassJobRepository');
   const {PrismaSatelliteRepository}=require('../../src/modules/satellites/repositories/PrismaSatelliteRepository');
@@ -21,7 +22,7 @@ test('PostgreSQL: job exclusion, staged publication, snapshots, filtering and ex
   const start=new Date('2025-03-26T05:19:34.116Z');
   const jobs=new PrismaStationPassJobRepository(), passes=new PrismaPassRepository();
   const satellites=new PrismaSatelliteRepository(), stations=new PrismaStationRepository();
-  const queue=new JobQueue();
+  const queue=new JobQueue(createJobRegistry());
   let user;const jobIds=[],satIds=[],upsertIds=[];
   try {
     user=await prisma.user.create({data:{name:'Pass integration',email:`passes-${token}@example.test`,pwd_encrypted:'test-only'}});
@@ -37,14 +38,18 @@ test('PostgreSQL: job exclusion, staged publication, snapshots, filtering and ex
     assert.equal((await prisma.stationPassJob.findUnique({where:{id:queued.id}})).status,'queued');
     await prisma.satelliteUpsertJob.update({where:{id:active.id},data:{status:'completed'}});
     const claimed=await queue.claimNext(start);assert.equal(claimed.kind,'passes');
+    const claimedRecord=await prisma.stationPassJob.findUniqueOrThrow({where:{id:claimed.id}});
     const pendingUpsert=await prisma.satelliteUpsertJob.create({data:{status:'queued'}});upsertIds.push(pendingUpsert.id);
     assert.equal(await queue.claimNext(start),null);
     assert.equal((await prisma.satelliteUpsertJob.findUnique({where:{id:pendingUpsert.id}})).status,'queued');
     // Remove this fixture's queued upsert before testing subsequent prediction generations.
     await prisma.satelliteUpsertJob.update({where:{id:pendingUpsert.id},data:{status:'completed'}});
     const station=await stations.findByUuid(token);
-    const creator=new CreatePasses(satellites,passes);
-    const result=await creator.execute(queued.id,station,claimed.job.window_start,claimed.job.window_end);
+    const creator=new CreatePasses(passes);
+    const generationId=await passes.createGeneration(queued.id,station);
+    let result;
+    try { result=await creator.execute(queued.id,generationId,station,(await satellites.findAll({afterId:0,limit:100})).data,claimedRecord.window_start,claimedRecord.window_end); }
+    finally { await creator.close(); }
     assert.ok(result.generated>0);
     assert.equal(await passes.findLatestGeneration(token),null,'staged passes must not be published');
     await jobs.complete(queued.id);
@@ -61,7 +66,7 @@ test('PostgreSQL: job exclusion, staged publication, snapshots, filtering and ex
     assert.equal(before.points.at(-1).time.getTime(),pass.los.getTime());
     await prisma.satellite.update({where:{id:sat.id},data:{inclination:0,mean_anomaly:0}});
     assert.deepEqual(await trajectory.execute(pass.passId,10),before,'must use immutable orbital snapshot');
-    const failed=await prisma.stationPassJob.create({data:{status:'running',window_hours:72,window_start:start,window_end:claimed.job.window_end}});
+    const failed=await prisma.stationPassJob.create({data:{status:'running',window_hours:72,window_start:start,window_end:claimedRecord.window_end}});
     jobIds.push(failed.id);
     await passes.createGeneration(failed.id,station);
     await jobs.fail(failed.id,'test failure');

@@ -1,21 +1,35 @@
+import path from "node:path";
 import { Logger } from "../../../lib/Logger";
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import type { SatelliteRepository } from "../../satellites/repositories/SatelliteRepository";
+import type { Satellite } from "../../satellites/entities/Satellite";
 import type { Station } from "../../stations/entities/Station";
 import type { PassRepository } from "../repositories/PassRepository";
-import { predict } from "../helpers/predict";
-import { InvalidOrbitError } from "../errors/InvalidOrbitError";
+import {
+  ThreadClient,
+  type ThreadClientContract,
+} from "../../../lib/thread-client/main";
+import type { PredictionTask, PredictionResult } from "../dto/PredictionDTO";
 
 const logger = new Logger("CreatePasses");
-
 export class CreatePasses {
   constructor(
-    private readonly satellites: SatelliteRepository,
     private readonly passes: PassRepository,
-    private readonly predictPasses: typeof predict = predict,
+    private readonly pool: ThreadClientContract<
+      PredictionTask,
+      PredictionResult
+    > = new ThreadClient({
+      provider: "piscina",
+      workerFile: path.join(__dirname, "../helpers/predictWorker"),
+    }),
   ) {}
 
-  async execute(jobId: string, station: Station, start: Date, end: Date) {
+  async execute(
+    jobId: string,
+    generationId: string,
+    station: Station,
+    satellites: Satellite[],
+    start: Date,
+    end: Date,
+  ) {
     if (
       !Number.isFinite(station.latitude) ||
       Math.abs(station.latitude) > 90 ||
@@ -25,57 +39,60 @@ export class CreatePasses {
     ) {
       throw new Error(`Station ${station.uuid} has invalid coordinates`);
     }
+    if (satellites.length > 100)
+      throw new Error("Prediction batches must contain at most 100 satellites");
     const startedAt = Date.now();
-    logger.info("Station prediction started", { jobId, stationUuid: station.uuid, windowStart: start, windowEnd: end });
-    const generationId = await this.passes.createGeneration(jobId, station);
-    let generated = 0;
-    let skipped = 0;
-    let processed = 0;
-    let batchNumber = 0;
-    // Await each calculation and insert before retrieving another page: bounded memory/backpressure.
-    let afterId = 0;
-    while (true) {
-      // Cursor ordering is stable when packet ingestion inserts new catalogue entries.
-      const batchStartedAt = Date.now();
-      const batch = await this.satellites.findAll({ afterId, limit: 100 });
-      for (const satellite of batch.data) {
-        let predictions;
-        try {
-          // Compute at the horizon; the HTTP request's minimum elevation is a database filter.
-          predictions = await this.predictPasses(
-            satellite,
-            station,
-            start.getTime(),
-            end.getTime(),
-            0,
-          );
-        } catch (error) {
-          // Packet ingestion can create catalogue entries without orbital elements.
-          // One such entry must not prevent predictions for the rest of the catalogue.
-          if (!(error instanceof InvalidOrbitError)) throw error;
-          skipped++;
-          continue;
-        }
-        generated += await this.passes.createMany(
-          generationId,
-          station.uuid,
+    logger.info("Station batch prediction started", {
+      jobId,
+      generationId,
+      stationUuid: station.uuid,
+      batchSize: satellites.length,
+    });
+    // Run the prediction for each satellite in parallel, but limit the number of concurrent threads 
+    // to avoid overwhelming the system.
+    const results = await Promise.allSettled(
+      satellites.map((satellite) =>
+        this.pool.run({
           satellite,
-          predictions,
-        );
-        await yieldToEventLoop();
-      }
-      processed += batch.data.length;
-      if (batch.data.length) {
-        logger.info("Satellite batch completed", {
-          jobId, stationUuid: station.uuid, generationId, batch: ++batchNumber,
-          batchSize: batch.data.length, processed, generated, skipped,
-          afterId: batch.data[batch.data.length - 1].id,
-          batchElapsedMs: Date.now() - batchStartedAt, elapsedMs: Date.now() - startedAt,
+          station,
+          start: start.getTime(),
+          end: end.getTime(),
+        }),
+      ),
+    );
+    const batch = [];
+    let skipped = 0;
+    // Check each result for errors and count skipped satellites. If any satellite prediction failed,
+    // throw an error to abort the job.
+    for (let index = 0; index < results.length; index++) {
+      const result = results[index];
+      if (result.status === "rejected") throw result.reason;
+      if (result.value.skipped) skipped++;
+      else
+        batch.push({
+          satellite: satellites[index],
+          passes: result.value.passes,
         });
-      }
-      if (batch.data.length < 100) break;
-      afterId = batch.data[batch.data.length - 1].id;
     }
+    // Backpressure: await all bulk inserts before moving to another station or fetching another batch.
+    const generated = await this.passes.createBatch(
+      generationId,
+      station.uuid,
+      batch,
+    );
+    logger.info("Station batch persisted", {
+      jobId,
+      generationId,
+      stationUuid: station.uuid,
+      processed: satellites.length,
+      generated,
+      skipped,
+      elapsedMs: Date.now() - startedAt,
+    });
     return { generated, skipped };
+  }
+
+  async close(): Promise<void> {
+    await this.pool.destroy();
   }
 }

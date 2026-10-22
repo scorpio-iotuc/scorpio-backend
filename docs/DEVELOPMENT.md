@@ -90,3 +90,14 @@ Commit the workflow, Compose file, tests, application changes and migrations tog
 Local checks do not validate GitHub triggers, action permissions or runner-specific behavior; the first GitHub run verifies those. Configure branch protection to require both jobs if failed CI should prevent merges. CI does not deploy to the VM.
 
 Satellite worker scheduling, configuration and rollout: [Unreleased changelog](CHANGELOG.md#unreleased--worker-de-satelites-y-logs-2026-10-07).
+
+## Adding a background job
+
+Implement [JobInterface](../src/jobs/JobInterface.ts) in the job's directory and register it in [registry.ts](../src/jobs/registry.ts). The queue and coordinator require no job-specific changes.
+
+- Give the implementation a unique `kind` and a display `name`. `schedule` enqueues due jobs idempotently; optional `onStartup` handles startup rules. Scheduling must never run the workload itself.
+- `peekQueued` returns the oldest queued record as `{ id, createdAt }`; `hasRunning` detects active records. The queue compares all registered jobs, using registration order to break timestamp ties.
+- `claim` uses the supplied transaction to conditionally change `queued` to `running` and initialize execution metadata. `recover` uses that same transaction boundary to fail interrupted jobs and clean up their staging data.
+- `execute` runs after the claim transaction commits. It must await all work and persist completion or failure before resolving, including any job-specific notifications. Persistence failures must propagate so the coordinator stops and the next owner can recover the job.
+
+All registered jobs share the coordinator's PostgreSQL session lock. Only the elected coordinator should call `recover` and `claimNext`; the queue's transaction alone does not replace that ownership lock. The polling loop continues scheduling while a job executes, and other jobs remain queued until it finishes.

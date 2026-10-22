@@ -2,18 +2,8 @@ import "dotenv/config";
 import { Client } from "pg";
 import { Logger } from "../lib/Logger";
 import { prisma } from "../lib/prisma";
-import { PrismaSatelliteUpsertJobRepository } from "../modules/satellites/repositories/PrismaSatelliteUpsertJobRepository";
-import { PrismaSatelliteRepository } from "../modules/satellites/repositories/PrismaSatelliteRepository";
-import { PrismaStationRepository } from "../modules/stations/repositories/PrismaStationRepository";
-import { PrismaPassRepository } from "../modules/passes/repositories/PrismaPassRepository";
-import { PrismaStationPassJobRepository } from "../modules/passes/repositories/PrismaStationPassJobRepository";
-import { UpsertSatellites } from "../modules/satellites/use-cases/UpsertSatellites";
-import { CreatePasses } from "../modules/passes/use-cases/CreatePasses";
-import { FetchCelesTrakClient } from "./upsert-satellite/clients/CelesTrakClient";
-import { executeSatelliteJob } from "./upsert-satellite/execute-job";
-import { executeStationPassJob } from "./create-station-passes/execute-job";
 import { JobQueue } from "./queue";
-import { scheduleKey } from "./schedule";
+import { createJobRegistry } from "./registry";
 import NotifyClient from "./notify/NotifyClient";
 import { safeNotify } from "./notify/safe-notify";
 
@@ -23,12 +13,6 @@ const notifications = process.env.DISCORD_WEBHOOK_URL?.trim()
       webhookUrl: process.env.DISCORD_WEBHOOK_URL!.trim(),
     })
   : undefined;
-const satellites = new PrismaSatelliteRepository();
-const satelliteJobs = new PrismaSatelliteUpsertJobRepository();
-const passJobs = new PrismaStationPassJobRepository();
-const passes = new PrismaPassRepository();
-const stations = new PrismaStationRepository();
-const queue = new JobQueue();
 const owner = new Client({
   connectionString: process.env.DATABASE_URL,
   keepAlive: true,
@@ -39,7 +23,7 @@ let activeJob: { id: string; kind: string } | null = null;
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-// The same session lock serializes both job types across all worker replicas.
+// The same session lock serializes all registered job types across all worker replicas.
 owner.on("error", (error) => {
   logger.error("Worker ownership connection lost", error);
   process.exit(1);
@@ -57,14 +41,8 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
 }
 
 async function main(): Promise<void> {
-  const trigger = process.env.UPSERT_SATELLITES_TRIGGER_TIME ?? "00:00";
-  scheduleKey(new Date(), trigger);
-  const windowHours = Number(process.env.STATION_PASSES_WINDOW_HOURS ?? 72);
-  if (!Number.isInteger(windowHours) || windowHours < 48 || windowHours > 240) {
-    throw new Error(
-      "STATION_PASSES_WINDOW_HOURS must be an integer between 48 and 240",
-    );
-  }
+  const jobs = createJobRegistry(notifications);
+  const queue = new JobQueue(jobs);
   await owner.connect();
   let waitingForOwnership = false;
   while (!stopping) {
@@ -73,12 +51,16 @@ async function main(): Promise<void> {
         .rows[0].acquired
     )
       break;
-    if (!waitingForOwnership) logger.info("Waiting for worker ownership; another replica owns the job coordinator");
+    if (!waitingForOwnership)
+      logger.info(
+        "Waiting for worker ownership; another replica owns the job coordinator",
+      );
     waitingForOwnership = true;
     await sleep(2000);
   }
   if (stopping) return;
   logger.info("Worker ownership acquired");
+  // Recover any jobs that were running when the previous worker crashed or was stopped.
   const recovered = await queue.recover();
   if (recovered)
     await safeNotify(
@@ -86,58 +68,35 @@ async function main(): Promise<void> {
       "alert",
       `${recovered} job(s): status=failed; interrupted by worker restart.`,
     );
-
-  if (process.env.RUN_ON_START === "true") {
-    const latest = await satelliteJobs.findLatest();
-    if (
-      !latest?.finished_at ||
-      Date.now() - latest.finished_at.getTime() >= 3_600_000
-    ) {
-      const job = await satelliteJobs.createQueued();
-      if (job) logger.info("Job queued on startup", { jobId: job.id, jobType: "satellite", status: "queued" });
-      if (job)
-        await safeNotify(
-          notifications,
-          "notify",
-          `Satellite job ${job.id}: queued on startup; status=queued`,
-        );
-    }
+  // Queue any jobs that should be scheduled now
+  for (const job of await queue.onStartup(new Date())) {
+    await safeNotify(
+      notifications,
+      "notify",
+      `${job.name} ${job.id}: queued on startup; status=queued`,
+    );
   }
-  logger.info(
-    `Ready; satellite upsert ${trigger} UTC; Create Station Passes 12:00 UTC; prediction window ${windowHours}h`,
-  );
+  logger.info("Ready", {
+    jobs: jobs.map((job) => ({ kind: job.kind, name: job.name })),
+  });
+  // The main loop is responsible for scheduling jobs, claiming the next job to run, and reporting waiting jobs.
   while (!stopping) {
     await owner.query("SELECT 1");
-    for (const job of await queue.schedule(new Date(), trigger, windowHours)) {
+    for (const job of await queue.schedule(new Date())) {
       await safeNotify(
         notifications,
         "notify",
         `${job.name} ${job.id}: scheduled; status=queued`,
       );
     }
+    // Claim the next job to run, if any, and execute it
     if (!active) {
       const next = await queue.claimNext(new Date());
       if (next) {
-        activeJob = { id: next.job.id, kind: next.kind };
+        activeJob = { id: next.id, kind: next.kind };
         // Do not await here: the loop must still enqueue scheduled jobs while work runs.
-        active = (
-          next.kind === "satellite"
-            ? executeSatelliteJob(
-                next.job.id,
-                satelliteJobs,
-                new UpsertSatellites(satellites),
-                new FetchCelesTrakClient(),
-                notifications,
-              )
-            : executeStationPassJob(
-                next.job,
-                passJobs,
-                stations,
-                passes,
-                new CreatePasses(satellites, passes),
-                notifications,
-              )
-        )
+        active = next
+          .execute()
           .catch(async (error) => {
             logger.error("Job could not persist its final status", error);
             stopping = true;
@@ -154,6 +113,7 @@ async function main(): Promise<void> {
           });
       }
     }
+    // Report any jobs that are waiting for the currently running job to finish, if any.
     await queue.reportWaiting(activeJob);
     await sleep(30_000);
   }

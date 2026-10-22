@@ -87,37 +87,32 @@ test('missing, changed-station and insufficient prediction coverage are not repo
   }
 });
 
-test('CreatePasses paginates the catalogue and applies backpressure before fetching the next page', async () => {
-  const events=[]; let release; let writing;
-  const blocked=new Promise(resolve=>release=resolve);
-  const entered=new Promise(resolve=>writing=resolve);
-  const satellites={findAll:async query=>{
-    events.push(['cursor',query.afterId]);
-    assert.equal(query.limit,100);
-    return {data:query.afterId===0 ? Array.from({length:100},(_,i)=>({...satellite,id:i+1})) : [{...satellite,id:101}],pagination:{totalPages:2}};
+test('CreatePasses waits for every task and bulk persistence before returning',async()=>{
+  let finishTask,finishWrite,writing;
+  const blockedTask=new Promise(resolve=>finishTask=resolve);
+  const blockedWrite=new Promise(resolve=>finishWrite=resolve);
+  const writeStarted=new Promise(resolve=>writing=resolve);
+  let writes=0,finished=false;
+  const pool={run:async task=>task.satellite.id===1?blockedTask:{passes:[],skipped:true},destroy:async()=>{}};
+  const passes={createBatch:async(g,uuid,rows)=>{
+    writes++;assert.equal(rows.length,1);assert.equal(rows[0].satellite.id,1);
+    writing();await blockedWrite;return 3;
   }};
-  const passes={createGeneration:async()=> 'g',createMany:async(g,uuid,sat,rows)=>{
-    events.push(['write',sat.id]);
-    if(sat.id===1){writing();await blocked;}
-    return rows.length;
-  }};
-  const create=new CreatePasses(satellites,passes,async(s,st,a,b,min)=>{
-    assert.equal(min,0);assert.equal(a,start.getTime());assert.equal(b,end.getTime());return [{}];
-  });
-  const pending=create.execute('job',station,start,end); await entered;
-  assert.deepEqual(events,[['cursor',0],['write',1]]);
-  release(); assert.deepEqual(await pending,{generated:101,skipped:0});
-  assert.deepEqual(events.filter(e=>e[0]==='cursor'),[['cursor',0],['cursor',100]]);
-  assert.deepEqual(events.slice(-2),[['cursor',100],['write',101]]);
+  const create=new CreatePasses(passes,pool);
+  const pending=create.execute('job','g',station,[{...satellite,id:1},{...satellite,id:2}],start,end).then(r=>{finished=true;return r;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(writes,0);
+  finishTask({passes:[{}],skipped:false});await writeStarted;assert.equal(finished,false);
+  finishWrite();assert.deepEqual(await pending,{generated:3,skipped:1});
 });
 
-test('CreatePasses skips only invalid orbits and propagates write failures', async () => {
-  const repo={findAll:async()=>({data:[{...satellite,id:1},satellite],pagination:{totalPages:1}})};
-  const passes={createGeneration:async()=> 'g',createMany:async()=>1};
-  const create=new CreatePasses(repo,passes,async s=>{if(s.id===1)throw new InvalidOrbitError();return [{}];});
-  assert.deepEqual(await create.execute('job',station,start,end),{generated:1,skipped:1});
-  const failure=new Error('database unavailable');passes.createMany=async()=>{throw failure;};
-  await assert.rejects(create.execute('job2',station,start,end),failure);
+test('CreatePasses drains outstanding tasks on worker failure without writing partial results',async()=>{
+  let finish;const pendingTask=new Promise(resolve=>finish=resolve);let rejected=false;
+  const pool={run:async task=>{if(task.satellite.id===1)throw new Error('worker failed');return pendingTask;},destroy:async()=>{}};
+  const create=new CreatePasses({createBatch:async()=>assert.fail('partial write')},pool);
+  const pending=create.execute('job','g',station,[{...satellite,id:1},{...satellite,id:2}],start,end);
+  const checked=assert.rejects(pending,/worker failed/).then(()=>{rejected=true;});
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(rejected,false);
+  finish({passes:[],skipped:false});await checked;
 });
 
 test('scan refines actual crossings and peak, including LOS beyond the window', async () => {
@@ -231,4 +226,22 @@ test('repository counts matching passes and paginates after a stable global AOS 
     aos:{gte:start,lt:end},max_elevation:{gte:20},satellite_norad_id:28492});
   assert.deepEqual(rowsQuery.orderBy,[{aos:'asc'},{satellite_norad_id:'asc'},{id:'asc'}]);
   assert.equal(rowsQuery.skip,40);assert.equal(rowsQuery.take,10);
+});
+
+test('bulk repository combines satellites into bounded writes and awaits database backpressure',async(t)=>{
+  const module=require('../src/lib/prisma');const original=module.prisma;
+  const {PrismaPassRepository}=require('../src/modules/passes/repositories/PrismaPassRepository');
+  let release,writing;const blocked=new Promise(r=>release=r),entered=new Promise(r=>writing=r);const calls=[];
+  module.prisma={satellitePass:{createMany:async({data})=>{
+    calls.push(data);if(calls.length===1){writing();await blocked;}return {count:data.length};
+  }}};t.after(()=>{module.prisma=original;});
+  const pass={aos:start,los:end,maxElevation:10,maxElevationAt:start};
+  const pending=new PrismaPassRepository().createBatch('g',station.uuid,[
+    {satellite,passes:Array(300).fill(pass)},
+    {satellite:{...satellite,id:13,noradId:28493},passes:Array(300).fill(pass)},
+  ]);
+  await entered;assert.equal(calls.length,1);assert.equal(calls[0].length,500);
+  assert.equal(calls[0][299].satellite_id,12);assert.equal(calls[0][300].satellite_id,13);
+  release();assert.equal(await pending,600);assert.equal(calls[1].length,100);
+  assert.equal(calls[1][0].orbital_snapshot.noradId,28493);
 });

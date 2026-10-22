@@ -25,6 +25,11 @@ export interface PassRepository {
     satellite: Satellite,
     passes: Pass[],
   ): Promise<number>;
+  createBatch(
+    generationId: string,
+    stationUuid: string,
+    predictions: { satellite: Satellite; passes: Pass[] }[],
+  ): Promise<number>;
   deleteExpired(now: Date): Promise<number>;
   findLatestGeneration(stationUuid: string): Promise<PassGeneration | null>;
   findAll(query: {

@@ -13,5 +13,10 @@ export interface ListPassesResponseDTO {
   stationUuid: string;
   windowHours: number;
   passes: Pass[];
-  pagination: { page: number; limit: number; total: number; totalPages: number };
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
